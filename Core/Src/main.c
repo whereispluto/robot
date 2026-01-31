@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32h7xx_hal.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -73,6 +74,7 @@ static void MX_FDCAN2_Init(void);
 /* USER CODE BEGIN 0 */
 extern USBD_HandleTypeDef hUsbDeviceHS;
 
+// 重定向printf到USB CDC
 int _write(int file, char *ptr, int len)
 {
     if (file == 1) {  // stdout
@@ -150,37 +152,24 @@ int main(void)
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
   HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
 
-  // // 重置电机零位
-  // motor_pos_reset(PORT1, 1);
-  // HAL_Delay(350);
-  // motor_pos_reset(PORT1, 2);
-  // HAL_Delay(350);
-  // motor_pos_reset(PORT1, 3);
-  // HAL_Delay(350);
-
-  // motor_many_pos_vel_MAXtqe(PORT1, 1, 60.0f, 20.0f,5.0f);   
-  // motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
-  // HAL_Delay(5000);
-
-  // motor_set_pos_vel_MAXtqe(PORT1, TFLOAT, 1, 60.0f, 60.0f, 5.0f);
-  // motor_set_pos_vel_MAXtqe(PORT1, TFLOAT, 2, 60.0f, 60.0f, 5.0f);
-  // motor_set_pos_vel_MAXtqe(PORT1, TFLOAT, 3, 60.0f, 60.0f, 5.0f);
-
-  // motor_set_brake(PORT1, TINT16, 1);
-  // motor_set_brake(PORT1, TINT16, 2);
-  // motor_set_brake(PORT1, TINT16, 3);
-
+  motor_set_vel(PORT1, TFLOAT, 1, 10.0f);
+  motor_set_vel(PORT2, TFLOAT, 2, 10.0f);
+  motor_set_vel(PORT1, TFLOAT, 3, 10.0f);
+  HAL_Delay(5000);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+
   while (1)
   {
-    // motor_process_state_all();
+    motor_process_state_all();
 
-    HAL_Delay(10000);
+    /* USER CODE END WHILE */
 
+    /* USER CODE BEGIN 3 */
 
     /* USER CODE END WHILE */
 
@@ -212,9 +201,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 2;
@@ -441,13 +429,13 @@ void MPU_Config(void)
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER0;
   MPU_InitStruct.BaseAddress = 0x30000000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
-  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_256KB;
+  MPU_InitStruct.SubRegionDisable = 0x00;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
   MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
@@ -455,12 +443,47 @@ void MPU_Config(void)
   /** Initializes and configures the Region and the memory to be protected
   */
   MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x30004000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER2;
+  MPU_InitStruct.BaseAddress = 0x30000000;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER3;
+  MPU_InitStruct.BaseAddress = 0x08000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_1MB;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER4;
   MPU_InitStruct.BaseAddress = 0x40000000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_512MB;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
   MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
   MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */

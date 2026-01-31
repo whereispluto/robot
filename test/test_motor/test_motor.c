@@ -6,7 +6,7 @@
 
 void test_motor_control(const uint8_t id)
 {
-    const uint8_t mode = 3;
+    const uint8_t mode = 9;
     const data_type_t type = TFLOAT;
     const port_t portx = PORT1;
 

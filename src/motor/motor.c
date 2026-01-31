@@ -317,6 +317,20 @@ void motor_process_state_all()
             {
                 const uint16_t len = get_fdcan_data_size(fdcan_rx_header.DataLength);
 
+
+                // // 在这里添加打印：接收到数据
+                // printf("[CAN%d] RX: ID=0x%03lX, Len=%u, Data: ", 
+                //        i, 
+                //        (unsigned long)fdcan_rx_header.Identifier,  // 转换为 unsigned long
+                //        (unsigned int)len);                         // 转换为 unsigned int
+                // // 打印前几个字节
+                // for (int j = 0; j < (len > 8 ? 8 : len); j++) {
+                //     printf("%02X ", fdcan_rdata[j]);
+                // }
+                // printf("\r\n");
+                
+
+
                 motor_process_state(port_maping[i].fdcan, fdcan_rx_header.Identifier >> 8, fdcan_rdata, len);
             }
         }
