@@ -121,11 +121,11 @@ int main(void)
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
-  // 启动 FDCAN
-  HAL_FDCAN_Start(&hfdcan1);
-
   // 打开电机电源
   HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
+  HAL_Delay(100);
+
+  test_motor_control(1);
   HAL_Delay(100);
   /* USER CODE END 2 */
 
@@ -138,51 +138,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    //   FDCAN_ProtocolStatusTypeDef protocolStatus;
-    //   HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocolStatus);
-
-    // FDCAN_ErrorCountersTypeDef errCounters;
-    // HAL_FDCAN_GetErrorCounters(&hfdcan1, &errCounters);
-
-    // printf("\r\n=== FDCAN Diagnostic ===\r\n");
-    // printf("Error: LastErr=%d, DataErr=%d, TxErr=%d, RxErr=%d\r\n",
-    //        protocolStatus.LastErrorCode, protocolStatus.DataLastErrorCode,
-    //        errCounters.TxErrorCnt, errCounters.RxErrorCnt);
-    // printf("Status: Warning=%d, BusOff=%d, ErrorPassive=%d\r\n",
-    //        protocolStatus.Warning, protocolStatus.BusOff, protocolStatus.ErrorPassive);
-
-    // uint32_t freeLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
-    // printf("Tx FIFO: %d/28 free\r\n", freeLevel);
-
-    // // 只在总线正常且FIFO有空间时才发送
-    // if (protocolStatus.BusOff == 1U)
-    // {
-    //     printf("\r\n*** BUS-OFF: CANNOT SEND! ***\r\n");
-    //     printf("*** NO DEVICE RESPONDING ON BUS ***\r\n\r\n");
-    //     printf("[HARDWARE CHECKLIST - CHECK THESE NOW!]\r\n");
-    //     printf("1. Motor power ON? (12V-48V supply connected)\r\n");
-    //     printf("2. CAN transceiver enabled? (EN/STB pin)\r\n");
-    //     printf("3. CANH/CANL wired? (Not swapped, not open)\r\n");
-    //     printf("4. 120ohm at BOTH ends? (Measure ~60ohm H-to-L)\r\n");
-    //     printf("5. Motor in CAN mode? (Not RS485/Modbus)\r\n");
-    //     printf("6. Baud: 1Mbps/5Mbps FD-BRS?\r\n\r\n");
-    // }
-    // else if (freeLevel > 5U)
-    // {
-    //     printf("Bus OK, sending to motor ID=1...\r\n");
-    //     test_motor_control(1);
-    //     HAL_Delay(50);
-        
-    //     freeLevel = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
-    //     printf("After send: %d/28 free\r\n", freeLevel);
-    // }
-    // else
-    // {
-    //     printf("** Tx FIFO nearly full (%d/28), skipping send **\r\n", freeLevel);
-    // }
-
-    test_motor_control(1);
-    HAL_Delay(2000);
    
   }
   /* USER CODE END 3 */
