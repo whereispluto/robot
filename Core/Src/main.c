@@ -123,12 +123,8 @@ int main(void)
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
-  // 启动 FDCAN
-  HAL_FDCAN_Start(&hfdcan1);
-
   // 打开电机电源
-  HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
-  HAL_Delay(100);
+  HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -296,7 +292,7 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataTimeSeg2 = 2;
   hfdcan2.Init.MessageRAMOffset = 0;
   hfdcan2.Init.StdFiltersNbr = 0;
-  hfdcan2.Init.ExtFiltersNbr = 2;
+  hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.RxFifo0ElmtsNbr = 10;
   hfdcan2.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64;
   hfdcan2.Init.RxFifo1ElmtsNbr = 0;
@@ -339,17 +335,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin|MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : MOTOR1_PWR_EN_Pin */
-  GPIO_InitStruct.Pin = MOTOR1_PWR_EN_Pin;
+  /*Configure GPIO pins : MOTOR2_PWR_EN_Pin MOTOR1_PWR_EN_Pin */
+  GPIO_InitStruct.Pin = MOTOR2_PWR_EN_Pin|MOTOR1_PWR_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(MOTOR1_PWR_EN_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : ESTOP_SW_Pin */
   GPIO_InitStruct.Pin = ESTOP_SW_Pin;
@@ -380,7 +376,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)// 外部中断回调函数
     if (GPIO_Pin == ESTOP_SW_Pin)
     {
         // 断电
-        HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
         // 蜂鸣器响一声
         HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
         HAL_Delay(200);

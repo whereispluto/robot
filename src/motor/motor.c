@@ -310,7 +310,7 @@ static uint8_t fdcan_rdata[64] = {0};
  */
 void motor_process_state_all()
 {
-    for (int i = 0; i < MOTOR_MAX_NUM; i++)
+    for (int i = 0; i < MOTOR_PORT_NUM; i++)
     {
         while (HAL_FDCAN_GetRxMessage(port_maping[i].fdcan, FDCAN_RX_FIFO0, &fdcan_rx_header, fdcan_rdata) == HAL_OK)
         {

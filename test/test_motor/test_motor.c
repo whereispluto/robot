@@ -4,11 +4,10 @@
 
 
 
-void test_motor_control(const uint8_t id)
+void test_motor_control_on_port(port_t portx, const uint8_t id)
 {
     const uint8_t mode = 3;
     const data_type_t type = TFLOAT;
-    const port_t portx = PORT1;
 
     switch (mode)
     {
@@ -54,5 +53,11 @@ void test_motor_control(const uint8_t id)
     default:
         break;
     }
+}
+
+
+void test_motor_control(const uint8_t id)
+{
+    test_motor_control_on_port(PORT1, id);
 }
 
