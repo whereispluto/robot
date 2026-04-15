@@ -2,6 +2,24 @@
 #include "motor.h"
 
 
+static uint8_t is_pos_direction_reversed(port_t portx, uint8_t id)
+{
+    if ((portx == PORT1 && (id == 2 || id == 3))
+            || (portx == PORT2 && id == 1))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+static float remap_pos_by_direction(port_t portx, uint8_t id, float pos)
+{
+    return is_pos_direction_reversed(portx, id) ? -pos : pos;
+}
+
+
 
 /**
  * @brief DQ 电压模式（并让电机返回状态信息）
@@ -71,7 +89,8 @@ void motor_set_dq_current(port_t portx, const data_type_t type, const uint8_t id
 void motor_set_pos(port_t portx, const data_type_t type, const uint8_t id, const float pos)
 {
     FDCAN_HandleTypeDef *fdcanHandle = motor_get_fdcan_pointer(portx);
-    const float temp1 = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float temp1 = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float temp2 = pos_float2int(temp1, type);
 
     switch(type)
@@ -162,7 +181,8 @@ void motor_set_tqe(port_t portx, const data_type_t type, const uint8_t id, const
 void motor_set_pos_vel(port_t portx, const data_type_t type, const uint8_t id, const float pos, const float vel)
 {
     FDCAN_HandleTypeDef *fdcanHandle = motor_get_fdcan_pointer(portx);
-    const float pos1 = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos1 = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel1 = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float pos2 = pos_float2int(pos1, type);
     const float vel2 = vel_float2int(vel1, type);
@@ -197,7 +217,8 @@ void motor_set_pos_vel_MAXtqe(port_t portx, const data_type_t type, const uint8_
                               const float pos, const float vel, const float tqe)
 {
     FDCAN_HandleTypeDef *fdcanHandle = motor_get_fdcan_pointer(portx);
-    const float pos1 = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos1 = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel1 = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float tqe1 = tqe_adjust(tqe, motor_get_model2(portx, id));
     const float pos2 = pos_float2int(pos1, type);
@@ -234,7 +255,8 @@ void motor_set_pos_vel_MAXtqe(port_t portx, const data_type_t type, const uint8_
 void motor_set_pos_velmax_acc(port_t portx, const data_type_t type, const uint8_t id, const float pos, const float vel, const float acc)
 {
     FDCAN_HandleTypeDef *fdcanHandle = motor_get_fdcan_pointer(portx);
-    const float pos1 = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos1 = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel1 = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float acc1 = conv_to_turns(acc, MOTOR_DATA_TYPE_FLAG);
     const float pos2 = pos_float2int(pos1, type);
@@ -356,7 +378,8 @@ void motor_set_pos_vel_tqe_kp_kd_2(port_t portx, const data_type_t type, const u
     FDCAN_HandleTypeDef *fdcanHandle = motor_get_fdcan_pointer(portx);
     const motor_type_t model = motor_get_model2(portx, id);
 
-    const float pos1 = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos1 = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel1 = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float tqe1 = tqe_adjust(tqe, model);
     const float pos2 = pos_float2int(pos1, type);

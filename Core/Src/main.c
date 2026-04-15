@@ -18,8 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32h7xx_hal_conf.h"
-#include "stm32h7xx_ll_usb.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -123,8 +121,23 @@ int main(void)
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
+  // 启动 FDCAN
+  HAL_FDCAN_Start(&hfdcan1);
+
   // 打开电机电源
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
+  HAL_Delay(100);
+
+  //所有电机置零
+    motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT1, 2, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT1, 3, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 1, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 3, 0.0, 20.0, 1);
+    motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+    motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -136,15 +149,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // motor_set_pos_vel_MAXtqe(1,TFLOAT,1, 30.0, 20.0, 1);
-    // motor_set_pos_vel_MAXtqe(2,TFLOAT,2, 30.0, 20.0, 1);
-    // motor_set_pos_vel_MAXtqe(1,TFLOAT,2, 30.0, 20.0, 1);
+    motor_set_pos_vel_MAXtqe(1,TFLOAT,3, 30.0, 40.0, 1);
 
-    motor_many_pos_vel_MAXtqe(PORT2, 1, 30.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT2, 2, 30.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT2, 3, 30.0, 20.0, 1);
+    // motor_many_pos_vel_MAXtqe(PORT2, 1, 30.0, 20.0, 1);
+    // motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
+    // motor_many_pos_vel_MAXtqe(PORT2, 3, -30.0, 20.0, 1);
 
-    motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+    // motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
 
   }
   /* USER CODE END 3 */
@@ -376,7 +387,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)// 外部中断回调函数
     if (GPIO_Pin == ESTOP_SW_Pin)
     {
         // 断电
-    HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin | MOTOR2_PWR_EN_Pin, GPIO_PIN_RESET);
         // 蜂鸣器响一声
         HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
         HAL_Delay(200);
