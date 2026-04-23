@@ -66,6 +66,25 @@
 
 /* USER CODE BEGIN EXPORTED_TYPES */
 
+typedef struct
+{
+  float target_joint_pos[6];
+  uint16_t seq;
+  uint16_t flags;
+} usb_cdc_command_t;
+
+typedef struct
+{
+  float joint_pos[6];
+  float joint_vel[6];
+  float base_lin_vel[3];
+  float base_ang_vel[3];
+  float base_quat[4];
+  float cmd[3];
+  uint32_t timestamp_ms;
+  uint16_t status;
+} usb_cdc_state_t;
+
 /* USER CODE END EXPORTED_TYPES */
 
 /**
@@ -109,6 +128,9 @@ extern USBD_CDC_ItfTypeDef USBD_Interface_fops_HS;
 uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
+
+uint8_t USB_CDC_GetLatestCommand(usb_cdc_command_t *command);
+uint8_t USB_CDC_SendState(const usb_cdc_state_t *state);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 

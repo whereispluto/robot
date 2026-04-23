@@ -59,6 +59,8 @@ FDCAN_HandleTypeDef hfdcan2;
 
 IWDG_HandleTypeDef hiwdg1;
 
+UART_HandleTypeDef huart1;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -69,22 +71,85 @@ static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_FDCAN2_Init(void);
 static void MX_IWDG1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
+static void USB_SendRobotState(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-extern USBD_HandleTypeDef hUsbDeviceHS;
-int _write(int file, char *ptr, int len)
+
+#define USB_STATE_PERIOD_MS 20U
+#define USB_CONTROL_PERIOD_MS 20U
+#define USB_CONTROL_VELOCITY 20.0f
+#define USB_CONTROL_TORQUE   1.0f
+
+static usb_cdc_command_t g_current_command = {0};
+static uint32_t g_last_state_tick = 0U;
+static uint32_t g_last_control_tick = 0U;
+
+static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
 {
-    if (file == 1) {  // stdout
-        if (hUsbDeviceHS.dev_state == USBD_STATE_CONFIGURED) {
-            CDC_Transmit_HS((uint8_t*)ptr, len);
-            return len;
-        }
-    }
-    return 0;
+  if (command == NULL)
+  {
+    return;
+  }
+
+  motor_many_pos_vel_MAXtqe(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
+static void USB_SendRobotState(void)
+{
+  usb_cdc_state_t state = {0};
+
+  motor_process_state_all();
+
+  state.joint_pos[0] = motor_get_state(PORT1, 1)->position;
+  state.joint_pos[1] = motor_get_state(PORT1, 2)->position;
+  state.joint_pos[2] = motor_get_state(PORT1, 3)->position;
+  state.joint_pos[3] = motor_get_state(PORT2, 1)->position;
+  state.joint_pos[4] = motor_get_state(PORT2, 2)->position;
+  state.joint_pos[5] = motor_get_state(PORT2, 3)->position;
+
+  state.joint_vel[0] = motor_get_state(PORT1, 1)->velocity;
+  state.joint_vel[1] = motor_get_state(PORT1, 2)->velocity;
+  state.joint_vel[2] = motor_get_state(PORT1, 3)->velocity;
+  state.joint_vel[3] = motor_get_state(PORT2, 1)->velocity;
+  state.joint_vel[4] = motor_get_state(PORT2, 2)->velocity;
+  state.joint_vel[5] = motor_get_state(PORT2, 3)->velocity;
+
+  state.base_quat[0] = 1.0f;
+  state.base_quat[1] = 0.0f;
+  state.base_quat[2] = 0.0f;
+  state.base_quat[3] = 0.0f;
+
+  state.base_lin_vel[0] = 0.0f;
+  state.base_lin_vel[1] = 0.0f;
+  state.base_lin_vel[2] = 0.0f;
+
+  state.base_ang_vel[0] = 0.0f;
+  state.base_ang_vel[1] = 0.0f;
+  state.base_ang_vel[2] = 0.0f;
+
+  state.cmd[0] = 0.0f;
+  state.cmd[1] = 0.0f;
+  state.cmd[2] = 0.0f;
+
+  state.timestamp_ms = HAL_GetTick();
+  state.status = 0U;
+
+  (void)USB_CDC_SendState(&state);
 }
 
 /* USER CODE END 0 */
@@ -121,12 +186,14 @@ int main(void)
   MX_FDCAN2_Init();
   MX_USB_DEVICE_Init();
   MX_IWDG1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
   // 启动 FDCAN
   HAL_FDCAN_Start(&hfdcan1);
+  HAL_FDCAN_Start(&hfdcan2);
 
   // 打开电机电源
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
@@ -142,6 +209,17 @@ int main(void)
     motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
     motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
 
+  USB_SendRobotState();
+  g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
+  g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
+  g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
+  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
+  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
+  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
+  USB_ApplyCommandToMotors(&g_current_command);
+  g_last_state_tick = HAL_GetTick();
+  g_last_control_tick = g_last_state_tick;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -153,13 +231,26 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    motor_set_pos_vel_MAXtqe(1,TFLOAT,3, 30.0, 40.0, 1);
+    usb_cdc_command_t received_command;
 
-    // motor_many_pos_vel_MAXtqe(PORT2, 1, 30.0, 20.0, 1);
-    // motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
-    // motor_many_pos_vel_MAXtqe(PORT2, 3, -30.0, 20.0, 1);
+    if (USB_CDC_GetLatestCommand(&received_command) != 0U)
+    {
+      g_current_command = received_command;
+    }
 
-    // motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+    if ((HAL_GetTick() - g_last_control_tick) >= USB_CONTROL_PERIOD_MS)
+    {
+      USB_ApplyCommandToMotors(&g_current_command);
+      g_last_control_tick = HAL_GetTick();
+    }
+
+    if ((HAL_GetTick() - g_last_state_tick) >= USB_STATE_PERIOD_MS)
+    {
+      USB_SendRobotState();
+      g_last_state_tick = HAL_GetTick();
+    }
+
+    HAL_Delay(1);
 
   }
   /* USER CODE END 3 */
@@ -356,6 +447,54 @@ static void MX_IWDG1_Init(void)
   /* USER CODE BEGIN IWDG1_Init 2 */
 
   /* USER CODE END IWDG1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
