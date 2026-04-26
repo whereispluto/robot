@@ -8,6 +8,24 @@
 
 many_data_s many_data_port[MANY_PORT_SIZE][MANY_DATA_BUF_MAX_LEN];
 
+
+static uint8_t is_pos_direction_reversed(port_t portx, uint8_t id)
+{
+    if ((portx == PORT1 && (id == 2 || id == 3))
+            || (portx == PORT2 && id == 1))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+static float remap_pos_by_direction(port_t portx, uint8_t id, float pos)
+{
+    return is_pos_direction_reversed(portx, id) ? -pos : pos;
+}
+
 const uint8_t many_get_cmd[MANY_GET_MAX_NUM][2] =
 {
     {0xFF, 0xFF},
@@ -87,7 +105,8 @@ void motor_many_dq_current(port_t portx, const uint8_t id, const float cur)
 void motor_many_pos(port_t portx, const uint8_t id, const float pos)
 {
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const int16_t pos_int16 = pos_float2int(pos_turns, TINT16);
     const uint16_t index = id - 1;
 
@@ -191,7 +210,8 @@ void motor_many_pos_vel(port_t portx, const uint8_t id, const float pos, const f
 {
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
 
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel_turns = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
 
     const int16_t pos_int16 = pos_float2int(pos_turns, TINT16);
@@ -227,8 +247,8 @@ void motor_many_pos_vel_MAXtqe(port_t portx, const uint8_t id, const float pos, 
 {
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
 
-
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel_turns = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float tqe_float = tqe_adjust(tqe, motor_get_model2(portx, id));
 
@@ -266,7 +286,8 @@ void motor_many_pos_vel_acc(port_t portx, const uint8_t id, const float pos, con
 {
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
 
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel_turns = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float acc_turns = conv_to_turns(acc, MOTOR_DATA_TYPE_FLAG);
 
@@ -307,7 +328,8 @@ void motor_many_pos_vel_tqe_kp_kd(port_t portx, const uint8_t id, const float po
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
     const motor_type_t model = motor_get_model2(portx, id);
 
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel_turns = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float tqe_float = tqe_adjust(tqe, motor_get_model2(portx, id));
 
@@ -358,7 +380,8 @@ void motor_many_pos_vel_tqe_kp_kd_2(port_t portx, const uint8_t id, const float 
     p_many_data_s p_many_data = motor_get_many_pointer(portx);
     const motor_type_t model = motor_get_model2(portx, id);
 
-    const float pos_turns = conv_to_turns(pos, MOTOR_DATA_TYPE_FLAG);
+    const float pos_remap = remap_pos_by_direction(portx, id, pos);
+    const float pos_turns = conv_to_turns(pos_remap, MOTOR_DATA_TYPE_FLAG);
     const float vel_turns = conv_to_turns(vel, MOTOR_DATA_TYPE_FLAG);
     const float tqe_float = tqe_adjust(tqe, motor_get_model2(portx, id));
 

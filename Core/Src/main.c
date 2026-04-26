@@ -18,12 +18,12 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32h7xx_ll_usb.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include <math.h>
 #include <stdio.h>
 #include "usbd_cdc_if.h"
 #include "usbd_core.h"
@@ -57,6 +57,10 @@
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan2;
 
+IWDG_HandleTypeDef hiwdg1;
+
+UART_HandleTypeDef huart1;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -66,22 +70,86 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_FDCAN2_Init(void);
+static void MX_IWDG1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
+static void USB_SendRobotState(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-extern USBD_HandleTypeDef hUsbDeviceHS;
-int _write(int file, char *ptr, int len)
+
+#define USB_STATE_PERIOD_MS 20U
+#define USB_CONTROL_PERIOD_MS 20U
+#define USB_CONTROL_VELOCITY 20.0f
+#define USB_CONTROL_TORQUE   1.0f
+
+static usb_cdc_command_t g_current_command = {0};
+static uint32_t g_last_state_tick = 0U;
+static uint32_t g_last_control_tick = 0U;
+
+static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
 {
-    if (file == 1) {  // stdout
-        if (hUsbDeviceHS.dev_state == USBD_STATE_CONFIGURED) {
-            CDC_Transmit_HS((uint8_t*)ptr, len);
-            return len;
-        }
-    }
-    return 0;
+  if (command == NULL)
+  {
+    return;
+  }
+
+  motor_many_pos_vel_MAXtqe(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
+static void USB_SendRobotState(void)
+{
+  usb_cdc_state_t state = {0};
+
+  motor_process_state_all();
+
+  state.joint_pos[0] = motor_get_state(PORT1, 1)->position;
+  state.joint_pos[1] = motor_get_state(PORT1, 2)->position;
+  state.joint_pos[2] = motor_get_state(PORT1, 3)->position;
+  state.joint_pos[3] = motor_get_state(PORT2, 1)->position;
+  state.joint_pos[4] = motor_get_state(PORT2, 2)->position;
+  state.joint_pos[5] = motor_get_state(PORT2, 3)->position;
+
+  state.joint_vel[0] = motor_get_state(PORT1, 1)->velocity;
+  state.joint_vel[1] = motor_get_state(PORT1, 2)->velocity;
+  state.joint_vel[2] = motor_get_state(PORT1, 3)->velocity;
+  state.joint_vel[3] = motor_get_state(PORT2, 1)->velocity;
+  state.joint_vel[4] = motor_get_state(PORT2, 2)->velocity;
+  state.joint_vel[5] = motor_get_state(PORT2, 3)->velocity;
+
+  state.base_quat[0] = 1.0f;
+  state.base_quat[1] = 0.0f;
+  state.base_quat[2] = 0.0f;
+  state.base_quat[3] = 0.0f;
+
+  state.base_lin_vel[0] = 0.0f;
+  state.base_lin_vel[1] = 0.0f;
+  state.base_lin_vel[2] = 0.0f;
+
+  state.base_ang_vel[0] = 0.0f;
+  state.base_ang_vel[1] = 0.0f;
+  state.base_ang_vel[2] = 0.0f;
+
+  state.cmd[0] = 0.0f;
+  state.cmd[1] = 0.0f;
+  state.cmd[2] = 0.0f;
+
+  state.timestamp_ms = HAL_GetTick();
+  state.status = 0U;
+
+  (void)USB_CDC_SendState(&state);
 }
 
 /* USER CODE END 0 */
@@ -117,16 +185,41 @@ int main(void)
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_USB_DEVICE_Init();
+  MX_IWDG1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
+  // 启动 FDCAN
+  HAL_FDCAN_Start(&hfdcan1);
+  HAL_FDCAN_Start(&hfdcan2);
+
   // 打开电机电源
-  HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
 
-  test_motor_control(1);
-  HAL_Delay(100);
+  //所有电机置零
+    motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT1, 2, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT1, 3, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 1, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
+    motor_many_pos_vel_MAXtqe(PORT2, 3, 0.0, 20.0, 1);
+    motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+    motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+
+  USB_SendRobotState();
+  g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
+  g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
+  g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
+  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
+  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
+  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
+  USB_ApplyCommandToMotors(&g_current_command);
+  g_last_state_tick = HAL_GetTick();
+  g_last_control_tick = g_last_state_tick;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -138,7 +231,27 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-   
+    usb_cdc_command_t received_command;
+
+    if (USB_CDC_GetLatestCommand(&received_command) != 0U)
+    {
+      g_current_command = received_command;
+    }
+
+    if ((HAL_GetTick() - g_last_control_tick) >= USB_CONTROL_PERIOD_MS)
+    {
+      USB_ApplyCommandToMotors(&g_current_command);
+      g_last_control_tick = HAL_GetTick();
+    }
+
+    if ((HAL_GetTick() - g_last_state_tick) >= USB_STATE_PERIOD_MS)
+    {
+      USB_SendRobotState();
+      g_last_state_tick = HAL_GetTick();
+    }
+
+    HAL_Delay(1);
+
   }
   /* USER CODE END 3 */
 }
@@ -165,8 +278,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 2;
@@ -285,7 +399,7 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataTimeSeg2 = 2;
   hfdcan2.Init.MessageRAMOffset = 0;
   hfdcan2.Init.StdFiltersNbr = 0;
-  hfdcan2.Init.ExtFiltersNbr = 2;
+  hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.RxFifo0ElmtsNbr = 10;
   hfdcan2.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64;
   hfdcan2.Init.RxFifo1ElmtsNbr = 0;
@@ -304,6 +418,83 @@ static void MX_FDCAN2_Init(void)
   /* USER CODE BEGIN FDCAN2_Init 2 */
 
   /* USER CODE END FDCAN2_Init 2 */
+
+}
+
+/**
+  * @brief IWDG1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG1_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG1_Init 0 */
+
+  /* USER CODE END IWDG1_Init 0 */
+
+  /* USER CODE BEGIN IWDG1_Init 1 */
+
+  /* USER CODE END IWDG1_Init 1 */
+  hiwdg1.Instance = IWDG1;
+  hiwdg1.Init.Prescaler = IWDG_PRESCALER_32;
+  hiwdg1.Init.Window = 4095;
+  hiwdg1.Init.Reload = 499;
+  if (HAL_IWDG_Init(&hiwdg1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG1_Init 2 */
+
+  /* USER CODE END IWDG1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
@@ -328,17 +519,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin|MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : MOTOR1_PWR_EN_Pin */
-  GPIO_InitStruct.Pin = MOTOR1_PWR_EN_Pin;
+  /*Configure GPIO pins : MOTOR2_PWR_EN_Pin MOTOR1_PWR_EN_Pin */
+  GPIO_InitStruct.Pin = MOTOR2_PWR_EN_Pin|MOTOR1_PWR_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(MOTOR1_PWR_EN_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : ESTOP_SW_Pin */
   GPIO_InitStruct.Pin = ESTOP_SW_Pin;
@@ -369,7 +560,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)// 外部中断回调函数
     if (GPIO_Pin == ESTOP_SW_Pin)
     {
         // 断电
-        HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin | MOTOR2_PWR_EN_Pin, GPIO_PIN_RESET);
         // 蜂鸣器响一声
         HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
         HAL_Delay(200);

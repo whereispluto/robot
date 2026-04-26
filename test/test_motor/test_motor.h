@@ -8,6 +8,7 @@
 
 
 void test_motor_control(const uint8_t id);
+void test_motor_control_on_port(port_t portx, const uint8_t id);
 
 #endif
 
