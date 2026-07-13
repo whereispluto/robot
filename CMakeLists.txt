@@ -52,12 +52,12 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
     # FDCAN源文件
     App/my_fdcan/my_fdcan.c
-    Src/convert/convert.c
-    Src/livelybot_fdcan/livelybot_fdcan.c
-    Src/motor_control/motor_control.c
-    Src/motor_many/motor_many.c
-    Src/motor_config/motor_config.c
-    Src/motor/motor.c
+    src/convert/convert.c
+    src/livelybot_fdcan/livelybot_fdcan.c
+    src/motor_control/motor_control.c
+    src/motor_many/motor_many.c
+    src/motor_config/motor_config.c
+    src/motor/motor.c
     #测试文件
     test/test_motor/test_motor.c
     test/test_motor_many/test_motor_many.c
@@ -69,12 +69,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
     # FDCAN相关头文件路径
     App/my_fdcan
-    Src/convert
-    Src/livelybot_fdcan
-    Src/motor_control
-    Src/motor_many
-    Src/motor_config
-    Src/motor
+    src/convert
+    src/livelybot_fdcan
+    src/motor_control
+    src/motor_many
+    src/motor_config
+    src/motor
     # 测试例程路径
     test/test_motor
     test/test_motor_many
