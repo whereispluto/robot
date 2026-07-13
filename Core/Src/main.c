@@ -57,8 +57,6 @@
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan2;
 
-IWDG_HandleTypeDef hiwdg1;
-
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
@@ -70,7 +68,6 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_FDCAN2_Init(void);
-static void MX_IWDG1_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -185,7 +182,6 @@ int main(void)
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_USB_DEVICE_Init();
-  MX_IWDG1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   fdcan_filter_init(&hfdcan1);
@@ -199,15 +195,15 @@ int main(void)
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
 
-  //所有电机置零
-    motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT1, 2, 0.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT1, 3, 0.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT2, 1, 0.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
-    motor_many_pos_vel_MAXtqe(PORT2, 3, 0.0, 20.0, 1);
-    motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-    motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  // //所有电机置零
+  //   motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
+  //   motor_many_pos_vel_MAXtqe(PORT1, 2, 0.0, 20.0, 1);
+  //   motor_many_pos_vel_MAXtqe(PORT1, 3, 0.0, 20.0, 1);
+  //   motor_many_pos_vel_MAXtqe(PORT2, 1, 0.0, 20.0, 1);
+  //   motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
+  //   motor_many_pos_vel_MAXtqe(PORT2, 3, 0.0, 20.0, 1);
+  //   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  //   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
 
   USB_SendRobotState();
   g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
@@ -278,9 +274,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 2;
@@ -422,35 +417,6 @@ static void MX_FDCAN2_Init(void)
 }
 
 /**
-  * @brief IWDG1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_IWDG1_Init(void)
-{
-
-  /* USER CODE BEGIN IWDG1_Init 0 */
-
-  /* USER CODE END IWDG1_Init 0 */
-
-  /* USER CODE BEGIN IWDG1_Init 1 */
-
-  /* USER CODE END IWDG1_Init 1 */
-  hiwdg1.Instance = IWDG1;
-  hiwdg1.Init.Prescaler = IWDG_PRESCALER_32;
-  hiwdg1.Init.Window = 4095;
-  hiwdg1.Init.Reload = 499;
-  if (HAL_IWDG_Init(&hiwdg1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN IWDG1_Init 2 */
-
-  /* USER CODE END IWDG1_Init 2 */
-
-}
-
-/**
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
@@ -559,12 +525,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)// 外部中断回调函数
 {
     if (GPIO_Pin == ESTOP_SW_Pin)
     {
-        // 断电
-        HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin | MOTOR2_PWR_EN_Pin, GPIO_PIN_RESET);
-        // 蜂鸣器响一声
-        HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
-        HAL_Delay(200);
-        HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+        // // 断电
+        // HAL_GPIO_WritePin(MOTOR1_PWR_EN_GPIO_Port, MOTOR1_PWR_EN_Pin | MOTOR2_PWR_EN_Pin, GPIO_PIN_RESET);
+        // // 蜂鸣器响一声
+        // HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+        // HAL_Delay(200);
+        // HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
     }
 }
 
