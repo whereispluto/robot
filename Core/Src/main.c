@@ -73,6 +73,9 @@ static void MX_USART1_UART_Init(void);
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
 static void USB_SendRobotState(void);
+static void IMU_UART_Start(void);
+static void IMU_UART_Process(void);
+static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 /* USER CODE END PFP */
 
@@ -84,9 +87,210 @@ static void USB_SendRobotState(void);
 #define USB_CONTROL_VELOCITY 20.0f
 #define USB_CONTROL_TORQUE   1.0f
 
+#define IMU_FRAME_HEADER_1       0x7EU
+#define IMU_FRAME_HEADER_2       0x23U
+#define IMU_FUNC_RAW_DATA        0x04U
+#define IMU_FUNC_QUATERNION      0x16U
+#define IMU_FUNC_SET_FREQUENCY   0x60U
+#define IMU_FRAME_MAX_LENGTH     64U
+#define IMU_UART_RX_BUFFER_SIZE  512U
+#define IMU_UART_RX_BUFFER_MASK  (IMU_UART_RX_BUFFER_SIZE - 1U)
+#define IMU_OUTPUT_FREQUENCY_HZ  50U
+#define IMU_DATA_TIMEOUT_MS      200U
+
+#define IMU_STATUS_RAW_VALID     0x0001U
+#define IMU_STATUS_QUAT_VALID    0x0002U
+#define IMU_STATUS_RX_OVERFLOW   0x8000U
+
+typedef struct
+{
+  float accel_g[3];
+  float gyro_rad_s[3];
+  float mag[3];
+  float quat[4];
+  uint32_t raw_timestamp_ms;
+  uint32_t quat_timestamp_ms;
+  uint16_t status;
+} imu_data_t;
+
 static usb_cdc_command_t g_current_command = {0};
 static uint32_t g_last_state_tick = 0U;
 static uint32_t g_last_control_tick = 0U;
+static imu_data_t g_imu_data = {0};
+static uint8_t g_imu_uart_rx_byte = 0U;
+static uint8_t g_imu_uart_rx_buffer[IMU_UART_RX_BUFFER_SIZE];
+static volatile uint16_t g_imu_uart_rx_head = 0U;
+static volatile uint16_t g_imu_uart_rx_tail = 0U;
+static volatile uint8_t g_imu_uart_rx_overflow = 0U;
+
+static int16_t IMU_ReadInt16LE(const uint8_t *data)
+{
+  uint16_t value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+  return (int16_t)value;
+}
+
+static float IMU_ReadFloatLE(const uint8_t *data)
+{
+  float value;
+  uint8_t bytes[4];
+
+  bytes[0] = data[0];
+  bytes[1] = data[1];
+  bytes[2] = data[2];
+  bytes[3] = data[3];
+  memcpy(&value, bytes, sizeof(value));
+  return value;
+}
+
+static void IMU_ParseFrame(const uint8_t *frame, uint8_t length)
+{
+  uint8_t checksum = 0U;
+
+  for (uint8_t i = 0U; i < (uint8_t)(length - 1U); ++i)
+  {
+    checksum = (uint8_t)(checksum + frame[i]);
+  }
+
+  if (checksum != frame[length - 1U])
+  {
+    return;
+  }
+
+  if ((frame[3] == IMU_FUNC_RAW_DATA) && (length == 0x17U))
+  {
+    const float accel_scale = 16.0f / 32767.0f;
+    const float gyro_scale = (2000.0f / 32767.0f) * ((float)M_PI / 180.0f);
+    const float mag_scale = 800.0f / 32767.0f;
+
+    for (uint8_t axis = 0U; axis < 3U; ++axis)
+    {
+      g_imu_data.accel_g[axis] = (float)IMU_ReadInt16LE(&frame[4U + axis * 2U]) * accel_scale;
+      g_imu_data.gyro_rad_s[axis] = (float)IMU_ReadInt16LE(&frame[10U + axis * 2U]) * gyro_scale;
+      g_imu_data.mag[axis] = (float)IMU_ReadInt16LE(&frame[16U + axis * 2U]) * mag_scale;
+    }
+
+    g_imu_data.raw_timestamp_ms = HAL_GetTick();
+    g_imu_data.status |= IMU_STATUS_RAW_VALID;
+  }
+  else if ((frame[3] == IMU_FUNC_QUATERNION) && (length == 0x15U))
+  {
+    float quat[4];
+    float norm_squared = 0.0f;
+
+    for (uint8_t i = 0U; i < 4U; ++i)
+    {
+      quat[i] = IMU_ReadFloatLE(&frame[4U + i * 4U]);
+      norm_squared += quat[i] * quat[i];
+    }
+
+    if (isfinite(norm_squared) && (norm_squared > 0.25f) && (norm_squared < 4.0f))
+    {
+      float inverse_norm = 1.0f / sqrtf(norm_squared);
+
+      for (uint8_t i = 0U; i < 4U; ++i)
+      {
+        g_imu_data.quat[i] = quat[i] * inverse_norm;
+      }
+
+      g_imu_data.quat_timestamp_ms = HAL_GetTick();
+      g_imu_data.status |= IMU_STATUS_QUAT_VALID;
+    }
+  }
+}
+
+static void IMU_UART_Process(void)
+{
+  static uint8_t frame[IMU_FRAME_MAX_LENGTH];
+  static uint8_t frame_index = 0U;
+  static uint8_t frame_length = 0U;
+
+  if (g_imu_uart_rx_overflow != 0U)
+  {
+    g_imu_uart_rx_overflow = 0U;
+    g_imu_data.status |= IMU_STATUS_RX_OVERFLOW;
+    frame_index = 0U;
+    frame_length = 0U;
+  }
+
+  while (g_imu_uart_rx_tail != g_imu_uart_rx_head)
+  {
+    uint8_t byte = g_imu_uart_rx_buffer[g_imu_uart_rx_tail];
+    g_imu_uart_rx_tail = (uint16_t)((g_imu_uart_rx_tail + 1U) & IMU_UART_RX_BUFFER_MASK);
+
+    if (frame_index == 0U)
+    {
+      if (byte == IMU_FRAME_HEADER_1)
+      {
+        frame[frame_index++] = byte;
+      }
+    }
+    else if (frame_index == 1U)
+    {
+      if (byte == IMU_FRAME_HEADER_2)
+      {
+        frame[frame_index++] = byte;
+      }
+      else if (byte != IMU_FRAME_HEADER_1)
+      {
+        frame_index = 0U;
+      }
+    }
+    else if (frame_index == 2U)
+    {
+      if ((byte >= 5U) && (byte <= IMU_FRAME_MAX_LENGTH))
+      {
+        frame_length = byte;
+        frame[frame_index++] = byte;
+      }
+      else
+      {
+        frame_index = 0U;
+        frame_length = 0U;
+      }
+    }
+    else
+    {
+      frame[frame_index++] = byte;
+      if (frame_index == frame_length)
+      {
+        IMU_ParseFrame(frame, frame_length);
+        frame_index = 0U;
+        frame_length = 0U;
+      }
+    }
+  }
+}
+
+static void IMU_UART_Start(void)
+{
+  HAL_NVIC_SetPriority(USART1_IRQn, 5U, 0U);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
+
+  if (HAL_UART_Receive_IT(&huart1, &g_imu_uart_rx_byte, 1U) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+static void IMU_SetOutputFrequency(uint8_t frequency_hz)
+{
+  uint8_t command[7] = {
+    IMU_FRAME_HEADER_1,
+    IMU_FRAME_HEADER_2,
+    0x07U,
+    IMU_FUNC_SET_FREQUENCY,
+    frequency_hz,
+    0x5FU,
+    0x00U
+  };
+
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    command[6] = (uint8_t)(command[6] + command[i]);
+  }
+
+  (void)HAL_UART_Transmit(&huart1, command, sizeof(command), 10U);
+}
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
 {
@@ -109,6 +313,8 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
 static void USB_SendRobotState(void)
 {
   usb_cdc_state_t state = {0};
+  uint32_t now = HAL_GetTick();
+  uint16_t imu_status = g_imu_data.status & IMU_STATUS_RX_OVERFLOW;
 
   motor_process_state_all();
 
@@ -126,25 +332,34 @@ static void USB_SendRobotState(void)
   state.joint_vel[4] = motor_get_state(PORT2, 2)->velocity;
   state.joint_vel[5] = motor_get_state(PORT2, 3)->velocity;
 
-  state.base_quat[0] = 1.0f;
-  state.base_quat[1] = 0.0f;
-  state.base_quat[2] = 0.0f;
-  state.base_quat[3] = 0.0f;
+  if (((g_imu_data.status & IMU_STATUS_QUAT_VALID) != 0U) &&
+      ((now - g_imu_data.quat_timestamp_ms) <= IMU_DATA_TIMEOUT_MS))
+  {
+    memcpy(state.base_quat, g_imu_data.quat, sizeof(state.base_quat));
+    imu_status |= IMU_STATUS_QUAT_VALID;
+  }
+  else
+  {
+    state.base_quat[0] = 1.0f;
+  }
 
   state.base_lin_vel[0] = 0.0f;
   state.base_lin_vel[1] = 0.0f;
   state.base_lin_vel[2] = 0.0f;
 
-  state.base_ang_vel[0] = 0.0f;
-  state.base_ang_vel[1] = 0.0f;
-  state.base_ang_vel[2] = 0.0f;
+  if (((g_imu_data.status & IMU_STATUS_RAW_VALID) != 0U) &&
+      ((now - g_imu_data.raw_timestamp_ms) <= IMU_DATA_TIMEOUT_MS))
+  {
+    memcpy(state.base_ang_vel, g_imu_data.gyro_rad_s, sizeof(state.base_ang_vel));
+    imu_status |= IMU_STATUS_RAW_VALID;
+  }
 
   state.cmd[0] = 0.0f;
   state.cmd[1] = 0.0f;
   state.cmd[2] = 0.0f;
 
-  state.timestamp_ms = HAL_GetTick();
-  state.status = 0U;
+  state.timestamp_ms = now;
+  state.status = imu_status;
 
   (void)USB_CDC_SendState(&state);
 }
@@ -184,6 +399,8 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  IMU_UART_Start();
+
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
@@ -194,6 +411,7 @@ int main(void)
   // 打开电机电源
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
+  IMU_SetOutputFrequency(IMU_OUTPUT_FREQUENCY_HZ);
 
   // //所有电机置零
   //   motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
@@ -228,6 +446,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     usb_cdc_command_t received_command;
+
+    IMU_UART_Process();
 
     if (USB_CDC_GetLatestCommand(&received_command) != 0U)
     {
@@ -520,6 +740,40 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void USART1_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart1);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    uint16_t next_head = (uint16_t)((g_imu_uart_rx_head + 1U) & IMU_UART_RX_BUFFER_MASK);
+
+    if (next_head != g_imu_uart_rx_tail)
+    {
+      g_imu_uart_rx_buffer[g_imu_uart_rx_head] = g_imu_uart_rx_byte;
+      g_imu_uart_rx_head = next_head;
+    }
+    else
+    {
+      g_imu_uart_rx_overflow = 1U;
+    }
+
+    (void)HAL_UART_Receive_IT(&huart1, &g_imu_uart_rx_byte, 1U);
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    (void)HAL_UART_Receive_IT(&huart1, &g_imu_uart_rx_byte, 1U);
+  }
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)// 外部中断回调函数
 {
