@@ -153,6 +153,41 @@ static motor_type_t motor_get_model1(FDCAN_HandleTypeDef *fdcanHandle, uint8_t i
 }
 
 
+static uint8_t is_position_direction_reversed(FDCAN_HandleTypeDef *fdcanHandle, uint8_t id)
+{
+    if (fdcanHandle->Instance == hfdcan1.Instance)
+    {
+        return (id == 2U || id == 3U);
+    }
+
+    if (fdcanHandle->Instance == hfdcan2.Instance)
+    {
+        return (id == 1U);
+    }
+
+    return 0U;
+}
+
+
+static float motor_position_from_raw(FDCAN_HandleTypeDef *fdcanHandle,
+                                     uint8_t id,
+                                     float raw_position,
+                                     data_type_t type)
+{
+    const float position_turns = pos_int2float(raw_position, type);
+    const float position = conv_from_turns(position_turns, MOTOR_DATA_TYPE_FLAG);
+
+    return is_position_direction_reversed(fdcanHandle, id) ? -position : position;
+}
+
+
+static float motor_velocity_from_raw(float raw_velocity, data_type_t type)
+{
+    const float velocity_turns = vel_int2float(raw_velocity, type);
+    return conv_from_turns(velocity_turns, MOTOR_DATA_TYPE_FLAG);
+}
+
+
 motor_type_t motor_get_model2(port_t portx, uint8_t id)
 {
     if (id <= MNULL || id > MOTOR_MAX_NUM)
@@ -190,6 +225,11 @@ p_motor_state_s motor_get_state(port_t portx, uint8_t id)
  */
 static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t id, const uint8_t *p_data, const uint8_t len)
 {
+    if (id == 0U || id > MOTOR_MAX_NUM)
+    {
+        return;
+    }
+
     p_motor_state_s p_motor_state = motor_get_state_pointer1(fdcanHandle);
     const uint8_t id_index = id - 1;
 
@@ -205,8 +245,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 9, sizeof(int16_t));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = pos_int2float(pos, TINT16);
-        p_motor_state[id_index].velocity = vel_int2float(vel, TINT16);
+        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT16);
         const float tqe_temp = tqe_int2float(tqe, TINT16);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[13];
@@ -223,8 +263,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 15, sizeof(int32_t));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = pos_int2float(pos, TINT32);
-        p_motor_state[id_index].velocity = vel_int2float(vel, TINT32);
+        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT32);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT32);
         const float tqe_temp = tqe_int2float(tqe, TINT32);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[21];
@@ -241,8 +281,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 15, sizeof(float));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = pos_int2float(pos, TFLOAT);
-        p_motor_state[id_index].velocity = vel_int2float(vel, TFLOAT);
+        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TFLOAT);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TFLOAT);
         const float tqe_temp = tqe_int2float(tqe, TFLOAT);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[21];
@@ -271,8 +311,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
             break;
         }
 
-        p_motor_state[id_index].position = pos_int2float(pos, TINT16);
-        p_motor_state[id_index].velocity = vel_int2float(vel, TINT16);
+        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT16);
         const float tqe_temp = tqe_int2float(tqe, TINT16);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
     }

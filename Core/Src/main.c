@@ -404,10 +404,6 @@ int main(void)
   fdcan_filter_init(&hfdcan1);
   fdcan_filter_init(&hfdcan2);
 
-  // 启动 FDCAN
-  HAL_FDCAN_Start(&hfdcan1);
-  HAL_FDCAN_Start(&hfdcan2);
-
   // 打开电机电源
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
@@ -612,7 +608,7 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataSyncJumpWidth = 2;
   hfdcan2.Init.DataTimeSeg1 = 5;
   hfdcan2.Init.DataTimeSeg2 = 2;
-  hfdcan2.Init.MessageRAMOffset = 0;
+  hfdcan2.Init.MessageRAMOffset = 756;
   hfdcan2.Init.StdFiltersNbr = 0;
   hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.RxFifo0ElmtsNbr = 10;
