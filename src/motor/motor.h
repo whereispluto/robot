@@ -5,7 +5,7 @@
 
 
 #define  MOTOR_PORT_NUM  2  // 使用 CAN 通道数量  
-#define  MOTOR_MAX_NUM   3  // 单个 CAN 通道所连接的最大电机数量
+#define  MOTOR_MAX_NUM   6  // 单个 CAN 通道支持的最大电机 ID/一拖多数据槽数量
 
 
 #include "stm32h7xx_hal.h"  

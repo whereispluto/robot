@@ -22,6 +22,21 @@ static motor_state_s motor_state_port[MOTOR_PORT_NUM][MOTOR_MAX_NUM] =  // 下�
         {
             // ID = 3
             .model = M4438_30,
+        },
+
+        {
+            // ID = 4（PORT1 未使用）
+            .model = M4438_30,
+        },
+
+        {
+            // ID = 5（PORT1 未使用）
+            .model = M4438_30,
+        },
+
+        {
+            // ID = 6（PORT1 未使用）
+            .model = M4438_30,
         }
     },
 
@@ -39,6 +54,21 @@ static motor_state_s motor_state_port[MOTOR_PORT_NUM][MOTOR_MAX_NUM] =  // 下�
         
         {
             // ID = 3
+            .model = M4438_30,
+        },
+
+        {
+            // ID = 4
+            .model = M4438_30,
+        },
+
+        {
+            // ID = 5
+            .model = M4438_30,
+        },
+
+        {
+            // ID = 6
             .model = M4438_30,
         }
     },
@@ -162,7 +192,7 @@ static uint8_t is_position_direction_reversed(FDCAN_HandleTypeDef *fdcanHandle, 
 
     if (fdcanHandle->Instance == hfdcan2.Instance)
     {
-        return (id == 1U);
+        return (id == 4U);
     }
 
     return 0U;

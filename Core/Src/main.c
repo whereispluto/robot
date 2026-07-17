@@ -302,9 +302,9 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
   motor_many_pos_vel_MAXtqe(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
   motor_many_pos_vel_MAXtqe(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
   motor_many_pos_vel_MAXtqe(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 4, command->target_joint_pos[3], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 5, command->target_joint_pos[4], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 6, command->target_joint_pos[5], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
 
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
@@ -321,16 +321,16 @@ static void USB_SendRobotState(void)
   state.joint_pos[0] = motor_get_state(PORT1, 1)->position;
   state.joint_pos[1] = motor_get_state(PORT1, 2)->position;
   state.joint_pos[2] = motor_get_state(PORT1, 3)->position;
-  state.joint_pos[3] = motor_get_state(PORT2, 1)->position;
-  state.joint_pos[4] = motor_get_state(PORT2, 2)->position;
-  state.joint_pos[5] = motor_get_state(PORT2, 3)->position;
+  state.joint_pos[3] = motor_get_state(PORT2, 4)->position;
+  state.joint_pos[4] = motor_get_state(PORT2, 5)->position;
+  state.joint_pos[5] = motor_get_state(PORT2, 6)->position;
 
   state.joint_vel[0] = motor_get_state(PORT1, 1)->velocity;
   state.joint_vel[1] = motor_get_state(PORT1, 2)->velocity;
   state.joint_vel[2] = motor_get_state(PORT1, 3)->velocity;
-  state.joint_vel[3] = motor_get_state(PORT2, 1)->velocity;
-  state.joint_vel[4] = motor_get_state(PORT2, 2)->velocity;
-  state.joint_vel[5] = motor_get_state(PORT2, 3)->velocity;
+  state.joint_vel[3] = motor_get_state(PORT2, 4)->velocity;
+  state.joint_vel[4] = motor_get_state(PORT2, 5)->velocity;
+  state.joint_vel[5] = motor_get_state(PORT2, 6)->velocity;
 
   if (((g_imu_data.status & IMU_STATUS_QUAT_VALID) != 0U) &&
       ((now - g_imu_data.quat_timestamp_ms) <= IMU_DATA_TIMEOUT_MS))
@@ -413,9 +413,9 @@ int main(void)
   g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
   g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
   g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
-  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
-  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
-  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
+  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 4)->position;
+  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 5)->position;
+  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 6)->position;
   USB_ApplyCommandToMotors(&g_current_command);
   g_last_state_tick = HAL_GetTick();
   g_last_control_tick = g_last_state_tick;
