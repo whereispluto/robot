@@ -12,7 +12,7 @@ many_data_s many_data_port[MANY_PORT_SIZE][MANY_DATA_BUF_MAX_LEN];
 static uint8_t is_pos_direction_reversed(port_t portx, uint8_t id)
 {
     if ((portx == PORT1 && (id == 2 || id == 3))
-            || (portx == PORT2 && id == 1))
+            || (portx == PORT2 && id == 4))
     {
         return 1;
     }
@@ -519,6 +519,10 @@ void motor_many_send(port_t portx, many_request_type_t request_type)
         const uint8_t current_data_len = (remaining_len > data_len_max) ? data_len_max : remaining_len;
         uint8_t cmd_len = get_motor_data_len(current_data_len);
 
+        for (uint8_t i = 0; i < cmd_len; i++)
+        {
+            cmd[i] = 0x50;
+        }
         my_memcpy(cmd, data, current_data_len);
         data += current_data_len;
         remaining_len -= current_data_len;
@@ -527,4 +531,3 @@ void motor_many_send(port_t portx, many_request_type_t request_type)
         ++id;
     }
 }
-
