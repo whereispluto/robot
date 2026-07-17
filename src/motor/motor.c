@@ -192,7 +192,7 @@ static uint8_t is_position_direction_reversed(FDCAN_HandleTypeDef *fdcanHandle, 
 
     if (fdcanHandle->Instance == hfdcan2.Instance)
     {
-        return (id == 4U);
+        return (id == 1U);
     }
 
     return 0U;
