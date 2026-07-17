@@ -409,16 +409,6 @@ int main(void)
   HAL_Delay(100);
   IMU_SetOutputFrequency(IMU_OUTPUT_FREQUENCY_HZ);
 
-  // //所有电机置零
-  //   motor_many_pos_vel_MAXtqe(PORT1, 1, 0.0, 20.0, 1);
-  //   motor_many_pos_vel_MAXtqe(PORT1, 2, 0.0, 20.0, 1);
-  //   motor_many_pos_vel_MAXtqe(PORT1, 3, 0.0, 20.0, 1);
-  //   motor_many_pos_vel_MAXtqe(PORT2, 1, 0.0, 20.0, 1);
-  //   motor_many_pos_vel_MAXtqe(PORT2, 2, 0.0, 20.0, 1);
-  //   motor_many_pos_vel_MAXtqe(PORT2, 3, 0.0, 20.0, 1);
-  //   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  //   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
-
   USB_SendRobotState();
   g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
   g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;

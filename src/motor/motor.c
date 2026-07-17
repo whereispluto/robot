@@ -181,10 +181,15 @@ static float motor_position_from_raw(FDCAN_HandleTypeDef *fdcanHandle,
 }
 
 
-static float motor_velocity_from_raw(float raw_velocity, data_type_t type)
+static float motor_velocity_from_raw(FDCAN_HandleTypeDef *fdcanHandle,
+                                     uint8_t id,
+                                     float raw_velocity,
+                                     data_type_t type)
 {
     const float velocity_turns = vel_int2float(raw_velocity, type);
-    return conv_from_turns(velocity_turns, MOTOR_DATA_TYPE_FLAG);
+    const float velocity = conv_from_turns(velocity_turns, MOTOR_DATA_TYPE_FLAG);
+
+    return is_position_direction_reversed(fdcanHandle, id) ? -velocity : velocity;
 }
 
 
@@ -246,7 +251,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
 
         p_motor_state[id_index].mode = p_data[3];
         p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT16);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT16);
         const float tqe_temp = tqe_int2float(tqe, TINT16);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[13];
@@ -264,7 +269,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
 
         p_motor_state[id_index].mode = p_data[3];
         p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT32);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT32);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT32);
         const float tqe_temp = tqe_int2float(tqe, TINT32);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[21];
@@ -282,7 +287,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
 
         p_motor_state[id_index].mode = p_data[3];
         p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TFLOAT);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TFLOAT);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TFLOAT);
         const float tqe_temp = tqe_int2float(tqe, TFLOAT);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
         p_motor_state[id_index].fault = (uint8_t)p_data[21];
@@ -312,7 +317,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         }
 
         p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(vel, TINT16);
+        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT16);
         const float tqe_temp = tqe_int2float(tqe, TINT16);
         p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
     }
