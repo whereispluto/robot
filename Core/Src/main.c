@@ -88,6 +88,7 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 #define USB_STATE_PERIOD_MS 20U
 #define USB_CONTROL_PERIOD_MS 20U
+#define WWDG_REFRESH_PERIOD_MS 100U
 /*
  * Match mjlab's output-side PD law:
  *   torque = (q_des - q) * Kp + (v_des - v) * Kd + torque_ff
@@ -133,6 +134,7 @@ typedef struct
 static usb_cdc_command_t g_current_command = {0};
 static uint32_t g_last_state_tick = 0U;
 static uint32_t g_last_control_tick = 0U;
+static uint32_t g_last_wwdg_refresh_tick = 0U;
 static imu_data_t g_imu_data = {0};
 static uint8_t g_imu_uart_rx_byte = 0U;
 static uint8_t g_imu_uart_rx_buffer[IMU_UART_RX_BUFFER_SIZE];
@@ -434,7 +436,6 @@ int main(void)
   MX_FDCAN2_Init();
   MX_USB_DEVICE_Init();
   MX_USART1_UART_Init();
-  MX_WWDG1_Init();
   /* USER CODE BEGIN 2 */
   IMU_UART_Start();
 
@@ -458,6 +459,10 @@ int main(void)
   USB_ApplyCommandToMotors(&g_current_command);
   g_last_state_tick = HAL_GetTick();
   g_last_control_tick = g_last_state_tick;
+
+  /* Start WWDG only after all blocking startup operations have completed. */
+  MX_WWDG1_Init();
+  g_last_wwdg_refresh_tick = HAL_GetTick();
 
   /* USER CODE END 2 */
 
@@ -489,6 +494,17 @@ int main(void)
     {
       USB_SendRobotState();
       g_last_state_tick = HAL_GetTick();
+    }
+
+    /*
+     * Refresh only after the main-loop work has completed. With the configured
+     * 120 MHz WWDG clock, prescaler 128, counter 127 and window 112, 100 ms is
+     * inside the valid refresh window of approximately 65.5 ms to 275.3 ms.
+     */
+    if ((HAL_GetTick() - g_last_wwdg_refresh_tick) >= WWDG_REFRESH_PERIOD_MS)
+    {
+      (void)HAL_WWDG_Refresh(&hwwdg1);
+      g_last_wwdg_refresh_tick = HAL_GetTick();
     }
 
     HAL_Delay(1);
@@ -725,9 +741,9 @@ static void MX_WWDG1_Init(void)
 
   /* USER CODE END WWDG1_Init 1 */
   hwwdg1.Instance = WWDG1;
-  hwwdg1.Init.Prescaler = WWDG_PRESCALER_1;
-  hwwdg1.Init.Window = 64;
-  hwwdg1.Init.Counter = 64;
+  hwwdg1.Init.Prescaler = WWDG_PRESCALER_128;
+  hwwdg1.Init.Window = 112;
+  hwwdg1.Init.Counter = 127;
   hwwdg1.Init.EWIMode = WWDG_EWI_DISABLE;
   if (HAL_WWDG_Init(&hwwdg1) != HAL_OK)
   {
