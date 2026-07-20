@@ -59,6 +59,8 @@ FDCAN_HandleTypeDef hfdcan2;
 
 UART_HandleTypeDef huart1;
 
+WWDG_HandleTypeDef hwwdg1;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -69,6 +71,7 @@ static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_FDCAN2_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_WWDG1_Init(void);
 /* USER CODE BEGIN PFP */
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
@@ -84,8 +87,9 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 #define USB_STATE_PERIOD_MS 20U
 #define USB_CONTROL_PERIOD_MS 20U
-#define USB_CONTROL_VELOCITY 20.0f
-#define USB_CONTROL_TORQUE   1.0f
+/* HTDW-4438-30-NE output-side continuous ratings: 40 rpm and 2 N m. */
+#define USB_CONTROL_VELOCITY 240.0f
+#define USB_CONTROL_TORQUE   2.0f
 
 #define IMU_FRAME_HEADER_1       0x7EU
 #define IMU_FRAME_HEADER_2       0x23U
@@ -398,6 +402,7 @@ int main(void)
   MX_FDCAN2_Init();
   MX_USB_DEVICE_Init();
   MX_USART1_UART_Init();
+  MX_WWDG1_Init();
   /* USER CODE BEGIN 2 */
   IMU_UART_Start();
 
@@ -667,6 +672,36 @@ static void MX_USART1_UART_Init(void)
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * @brief WWDG1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_WWDG1_Init(void)
+{
+
+  /* USER CODE BEGIN WWDG1_Init 0 */
+
+  /* USER CODE END WWDG1_Init 0 */
+
+  /* USER CODE BEGIN WWDG1_Init 1 */
+
+  /* USER CODE END WWDG1_Init 1 */
+  hwwdg1.Instance = WWDG1;
+  hwwdg1.Init.Prescaler = WWDG_PRESCALER_1;
+  hwwdg1.Init.Window = 64;
+  hwwdg1.Init.Counter = 64;
+  hwwdg1.Init.EWIMode = WWDG_EWI_DISABLE;
+  if (HAL_WWDG_Init(&hwwdg1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN WWDG1_Init 2 */
+
+  /* USER CODE END WWDG1_Init 2 */
 
 }
 
