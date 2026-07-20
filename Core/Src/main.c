@@ -75,6 +75,7 @@ static void MX_WWDG1_Init(void);
 /* USER CODE BEGIN PFP */
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
+static void USB_ConfigureMotorTorqueLimits(void);
 static void USB_SendRobotState(void);
 static void IMU_UART_Start(void);
 static void IMU_UART_Process(void);
@@ -87,9 +88,21 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 #define USB_STATE_PERIOD_MS 20U
 #define USB_CONTROL_PERIOD_MS 20U
-/* HTDW-4438-30-NE output-side continuous ratings: 40 rpm and 2 N m. */
-#define USB_CONTROL_VELOCITY 240.0f
-#define USB_CONTROL_TORQUE   2.0f
+/*
+ * Match mjlab's output-side PD law:
+ *   torque = (q_des - q) * Kp + (v_des - v) * Kd + torque_ff
+ *
+ * The motor protocol evaluates position and velocity in turns and turns/s, while
+ * mjlab gains use radians and rad/s. The per-turn constants below are the matching
+ * values after 2*pi conversion and M4438_30 int16 protocol quantization.
+ */
+#define USB_CONTROL_KP_NM_PER_RAD       25.2628551029f
+#define USB_CONTROL_KD_NMS_PER_RAD      2.0076441141f
+#define USB_CONTROL_KP_NM_PER_TURN      158.7312f
+#define USB_CONTROL_KD_NMS_PER_TURN     12.6144f
+#define USB_CONTROL_TARGET_VELOCITY     0.0f
+#define USB_CONTROL_FEEDFORWARD_TORQUE  0.0f
+#define USB_CONTROL_MAX_TORQUE          2.0f
 
 #define IMU_FRAME_HEADER_1       0x7EU
 #define IMU_FRAME_HEADER_2       0x23U
@@ -303,12 +316,31 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
     return;
   }
 
-  motor_many_pos_vel_MAXtqe(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_VELOCITY, USB_CONTROL_TORQUE);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
+static void USB_ConfigureMotorTorqueLimits(void)
+{
+  /*
+   * True motion-control packets do not carry register 0x025 (maximum torque).
+   * Seed it through the position/velocity/maximum-torque mode before entering
+   * true motion control. NAN means no position target and zero velocity prevents
+   * an intentional startup motion; the same frames request the initial states.
+   */
+  motor_many_pos_vel_MAXtqe(PORT1, 1, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 2, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 3, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 1, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 2, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT2, 3, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
 
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
@@ -414,6 +446,8 @@ int main(void)
   HAL_Delay(100);
   IMU_SetOutputFrequency(IMU_OUTPUT_FREQUENCY_HZ);
 
+  USB_ConfigureMotorTorqueLimits();
+  HAL_Delay(2U);
   USB_SendRobotState();
   g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
   g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
