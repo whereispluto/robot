@@ -4,8 +4,8 @@
 
 static uint8_t is_pos_direction_reversed(port_t portx, uint8_t id)
 {
-    if ((portx == PORT1 && (id == 2 || id == 3))
-            || (portx == PORT2 && id == 4))
+    if ((portx == PORT1 && id == 1U)
+            || (portx == PORT2 && (id == 2U || id == 3U)))
     {
         return 1;
     }
@@ -515,7 +515,6 @@ void motor_set_reset(port_t portx, const uint8_t id)
 
     set_motor_reset_int8(fdcanHandle, id);
 }
-
 
 
 
