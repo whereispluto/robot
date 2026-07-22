@@ -79,7 +79,6 @@ static void USB_ConfigureMotorTorqueLimits(void);
 static void USB_SendRobotState(void);
 static void IMU_UART_Start(void);
 static void IMU_UART_Process(void);
-static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 /* USER CODE END PFP */
 
@@ -107,15 +106,16 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 #define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
 #define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
 
-#define IMU_FRAME_HEADER_1       0x7EU
-#define IMU_FRAME_HEADER_2       0x23U
-#define IMU_FUNC_RAW_DATA        0x04U
-#define IMU_FUNC_QUATERNION      0x16U
-#define IMU_FUNC_SET_FREQUENCY   0x60U
-#define IMU_FRAME_MAX_LENGTH     64U
+#define IMU_FRAME_HEADER         0xFCU
+#define IMU_FRAME_END            0xFDU
+#define IMU_PACKET_IMU           0x40U
+#define IMU_PACKET_AHRS          0x41U
+#define IMU_PAYLOAD_IMU_LENGTH   56U
+#define IMU_PAYLOAD_AHRS_LENGTH  48U
+#define IMU_FRAME_OVERHEAD       8U
+#define IMU_FRAME_MAX_LENGTH     (255U + IMU_FRAME_OVERHEAD)
 #define IMU_UART_RX_BUFFER_SIZE  512U
 #define IMU_UART_RX_BUFFER_MASK  (IMU_UART_RX_BUFFER_SIZE - 1U)
-#define IMU_OUTPUT_FREQUENCY_HZ  50U
 #define IMU_DATA_TIMEOUT_MS      200U
 
 #define IMU_STATUS_RAW_VALID     0x0001U
@@ -124,7 +124,7 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 
 typedef struct
 {
-  float accel_g[3];
+  float accel_m_s2[3];
   float gyro_rad_s[3];
   float mag[3];
   float quat[4];
@@ -144,10 +144,38 @@ static volatile uint16_t g_imu_uart_rx_head = 0U;
 static volatile uint16_t g_imu_uart_rx_tail = 0U;
 static volatile uint8_t g_imu_uart_rx_overflow = 0U;
 
-static int16_t IMU_ReadInt16LE(const uint8_t *data)
+static uint8_t IMU_CRC8(const uint8_t *data, uint16_t length)
 {
-  uint16_t value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-  return (int16_t)value;
+  uint8_t crc = 0U;
+
+  for (uint16_t i = 0U; i < length; ++i)
+  {
+    crc ^= data[i];
+    for (uint8_t bit = 0U; bit < 8U; ++bit)
+    {
+      crc = ((crc & 0x01U) != 0U) ? (uint8_t)((crc >> 1U) ^ 0x8CU)
+                                  : (uint8_t)(crc >> 1U);
+    }
+  }
+
+  return crc;
+}
+
+static uint16_t IMU_CRC16(const uint8_t *data, uint16_t length)
+{
+  uint16_t crc = 0U;
+
+  for (uint16_t i = 0U; i < length; ++i)
+  {
+    crc ^= (uint16_t)data[i] << 8U;
+    for (uint8_t bit = 0U; bit < 8U; ++bit)
+    {
+      crc = ((crc & 0x8000U) != 0U) ? (uint16_t)((crc << 1U) ^ 0x1021U)
+                                    : (uint16_t)(crc << 1U);
+    }
+  }
+
+  return crc;
 }
 
 static float IMU_ReadFloatLE(const uint8_t *data)
@@ -163,45 +191,70 @@ static float IMU_ReadFloatLE(const uint8_t *data)
   return value;
 }
 
-static void IMU_ParseFrame(const uint8_t *frame, uint8_t length)
+static void IMU_ParseFrame(const uint8_t *frame, uint16_t length)
 {
-  uint8_t checksum = 0U;
+  uint8_t payload_length = frame[2];
+  const uint8_t *payload = &frame[7];
+  uint16_t received_crc16;
 
-  for (uint8_t i = 0U; i < (uint8_t)(length - 1U); ++i)
-  {
-    checksum = (uint8_t)(checksum + frame[i]);
-  }
-
-  if (checksum != frame[length - 1U])
+  if ((length != ((uint16_t)payload_length + IMU_FRAME_OVERHEAD)) ||
+      (frame[length - 1U] != IMU_FRAME_END) ||
+      (IMU_CRC8(frame, 4U) != frame[4]))
   {
     return;
   }
 
-  if ((frame[3] == IMU_FUNC_RAW_DATA) && (length == 0x17U))
+  received_crc16 = ((uint16_t)frame[5] << 8U) | frame[6];
+  if (IMU_CRC16(payload, payload_length) != received_crc16)
   {
-    const float accel_scale = 16.0f / 32767.0f;
-    const float gyro_scale = (2000.0f / 32767.0f) * ((float)M_PI / 180.0f);
-    const float mag_scale = 800.0f / 32767.0f;
+    return;
+  }
+
+  if ((frame[1] == IMU_PACKET_IMU) && (payload_length == IMU_PAYLOAD_IMU_LENGTH))
+  {
+    float gyro[3];
+    float accel[3];
+    float mag[3];
 
     for (uint8_t axis = 0U; axis < 3U; ++axis)
     {
-      g_imu_data.accel_g[axis] = (float)IMU_ReadInt16LE(&frame[4U + axis * 2U]) * accel_scale;
-      g_imu_data.gyro_rad_s[axis] = (float)IMU_ReadInt16LE(&frame[10U + axis * 2U]) * gyro_scale;
-      g_imu_data.mag[axis] = (float)IMU_ReadInt16LE(&frame[16U + axis * 2U]) * mag_scale;
+      gyro[axis] = IMU_ReadFloatLE(&payload[axis * 4U]);
+      accel[axis] = IMU_ReadFloatLE(&payload[12U + axis * 4U]);
+      mag[axis] = IMU_ReadFloatLE(&payload[24U + axis * 4U]);
     }
 
-    g_imu_data.raw_timestamp_ms = HAL_GetTick();
-    g_imu_data.status |= IMU_STATUS_RAW_VALID;
+    if (isfinite(gyro[0]) && isfinite(gyro[1]) && isfinite(gyro[2]))
+    {
+      memcpy(g_imu_data.gyro_rad_s, gyro, sizeof(gyro));
+      memcpy(g_imu_data.accel_m_s2, accel, sizeof(accel));
+      memcpy(g_imu_data.mag, mag, sizeof(mag));
+      g_imu_data.raw_timestamp_ms = HAL_GetTick();
+      g_imu_data.status |= IMU_STATUS_RAW_VALID;
+    }
   }
-  else if ((frame[3] == IMU_FUNC_QUATERNION) && (length == 0x15U))
+  else if ((frame[1] == IMU_PACKET_AHRS) && (payload_length == IMU_PAYLOAD_AHRS_LENGTH))
   {
+    float gyro[3];
     float quat[4];
     float norm_squared = 0.0f;
 
+    for (uint8_t axis = 0U; axis < 3U; ++axis)
+    {
+      gyro[axis] = IMU_ReadFloatLE(&payload[axis * 4U]);
+    }
+
     for (uint8_t i = 0U; i < 4U; ++i)
     {
-      quat[i] = IMU_ReadFloatLE(&frame[4U + i * 4U]);
+      /* FDILink Q1..Q4 are Qw, Qx, Qy, Qz, as in the vendor example. */
+      quat[i] = IMU_ReadFloatLE(&payload[24U + i * 4U]);
       norm_squared += quat[i] * quat[i];
+    }
+
+    if (isfinite(gyro[0]) && isfinite(gyro[1]) && isfinite(gyro[2]))
+    {
+      memcpy(g_imu_data.gyro_rad_s, gyro, sizeof(gyro));
+      g_imu_data.raw_timestamp_ms = HAL_GetTick();
+      g_imu_data.status |= IMU_STATUS_RAW_VALID;
     }
 
     if (isfinite(norm_squared) && (norm_squared > 0.25f) && (norm_squared < 4.0f))
@@ -222,8 +275,8 @@ static void IMU_ParseFrame(const uint8_t *frame, uint8_t length)
 static void IMU_UART_Process(void)
 {
   static uint8_t frame[IMU_FRAME_MAX_LENGTH];
-  static uint8_t frame_index = 0U;
-  static uint8_t frame_length = 0U;
+  static uint16_t frame_index = 0U;
+  static uint16_t frame_length = 0U;
 
   if (g_imu_uart_rx_overflow != 0U)
   {
@@ -240,38 +293,27 @@ static void IMU_UART_Process(void)
 
     if (frame_index == 0U)
     {
-      if (byte == IMU_FRAME_HEADER_1)
+      if (byte == IMU_FRAME_HEADER)
       {
         frame[frame_index++] = byte;
-      }
-    }
-    else if (frame_index == 1U)
-    {
-      if (byte == IMU_FRAME_HEADER_2)
-      {
-        frame[frame_index++] = byte;
-      }
-      else if (byte != IMU_FRAME_HEADER_1)
-      {
-        frame_index = 0U;
       }
     }
     else if (frame_index == 2U)
     {
-      if ((byte >= 5U) && (byte <= IMU_FRAME_MAX_LENGTH))
-      {
-        frame_length = byte;
-        frame[frame_index++] = byte;
-      }
-      else
-      {
-        frame_index = 0U;
-        frame_length = 0U;
-      }
+      frame[frame_index++] = byte;
+      frame_length = (uint16_t)byte + IMU_FRAME_OVERHEAD;
     }
     else
     {
       frame[frame_index++] = byte;
+
+      if ((frame_index == 5U) && (IMU_CRC8(frame, 4U) != frame[4]))
+      {
+        frame_index = 0U;
+        frame_length = 0U;
+        continue;
+      }
+
       if (frame_index == frame_length)
       {
         IMU_ParseFrame(frame, frame_length);
@@ -291,26 +333,6 @@ static void IMU_UART_Start(void)
   {
     Error_Handler();
   }
-}
-
-static void IMU_SetOutputFrequency(uint8_t frequency_hz)
-{
-  uint8_t command[7] = {
-    IMU_FRAME_HEADER_1,
-    IMU_FRAME_HEADER_2,
-    0x07U,
-    IMU_FUNC_SET_FREQUENCY,
-    frequency_hz,
-    0x5FU,
-    0x00U
-  };
-
-  for (uint8_t i = 0U; i < 6U; ++i)
-  {
-    command[6] = (uint8_t)(command[6] + command[i]);
-  }
-
-  (void)HAL_UART_Transmit(&huart1, command, sizeof(command), 10U);
 }
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
@@ -464,7 +486,6 @@ int main(void)
   // 打开电机电源
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
-  IMU_SetOutputFrequency(IMU_OUTPUT_FREQUENCY_HZ);
 
   USB_ConfigureMotorTorqueLimits();
   HAL_Delay(2U);
@@ -712,7 +733,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 921600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
