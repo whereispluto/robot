@@ -53,6 +53,9 @@
 #define APP_TX_DATA_SIZE  2048
 /* USER CODE BEGIN EXPORTED_DEFINES */
 
+/* Select the motor's trapezoidal position/velocity/acceleration mode. */
+#define USB_CDC_COMMAND_FLAG_STARTUP_TRAJECTORY  0x0001U
+
 /* USER CODE END EXPORTED_DEFINES */
 
 /**

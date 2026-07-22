@@ -104,6 +104,8 @@ static void IMU_SetOutputFrequency(uint8_t frequency_hz);
 #define USB_CONTROL_TARGET_VELOCITY     0.0f
 #define USB_CONTROL_FEEDFORWARD_TORQUE  0.0f
 #define USB_CONTROL_MAX_TORQUE          2.0f
+#define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
+#define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
 
 #define IMU_FRAME_HEADER_1       0x7EU
 #define IMU_FRAME_HEADER_2       0x23U
@@ -318,12 +320,29 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
     return;
   }
 
-  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-  motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  if ((command->flags & USB_CDC_COMMAND_FLAG_STARTUP_TRAJECTORY) != 0U)
+  {
+    /*
+     * Use the drive's trapezoidal trajectory generator while moving to the
+     * policy default pose. This avoids commanding a moving position target
+     * together with zero desired velocity through the policy-time PD loop.
+     */
+    motor_many_pos_vel_acc(PORT1, 1, command->target_joint_pos[0], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+    motor_many_pos_vel_acc(PORT1, 2, command->target_joint_pos[1], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+    motor_many_pos_vel_acc(PORT1, 3, command->target_joint_pos[2], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+    motor_many_pos_vel_acc(PORT2, 1, command->target_joint_pos[3], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+    motor_many_pos_vel_acc(PORT2, 2, command->target_joint_pos[4], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+    motor_many_pos_vel_acc(PORT2, 3, command->target_joint_pos[5], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  }
+  else
+  {
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+  }
 
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
