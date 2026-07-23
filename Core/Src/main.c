@@ -196,6 +196,30 @@ static float IMU_ReadFloatLE(const uint8_t *data)
   return value;
 }
 
+/*
+ * FDILink's ROS driver maps the sensor frame to the robot base frame with a
+ * fixed 180-degree rotation about X:
+ *   vector:     [x, y, z] -> [x, -y, -z]
+ *   quaternion: [w, x, y, z] -> [w, x, -y, -z]
+ *
+ * Apply the same transform to every IMU quantity exported to the host so the
+ * angular velocity and orientation observations use one consistent frame.
+ */
+static void IMU_VectorSensorToBase(const float sensor[3], float base[3])
+{
+  base[0] = sensor[0];
+  base[1] = -sensor[1];
+  base[2] = -sensor[2];
+}
+
+static void IMU_QuaternionSensorToBase(const float sensor[4], float base[4])
+{
+  base[0] = sensor[0];
+  base[1] = sensor[1];
+  base[2] = -sensor[2];
+  base[3] = -sensor[3];
+}
+
 static void IMU_ParseFrame(const uint8_t *frame, uint16_t length)
 {
   uint8_t payload_length = frame[2];
@@ -230,9 +254,9 @@ static void IMU_ParseFrame(const uint8_t *frame, uint16_t length)
 
     if (isfinite(gyro[0]) && isfinite(gyro[1]) && isfinite(gyro[2]))
     {
-      memcpy(g_imu_data.gyro_rad_s, gyro, sizeof(gyro));
-      memcpy(g_imu_data.accel_m_s2, accel, sizeof(accel));
-      memcpy(g_imu_data.mag, mag, sizeof(mag));
+      IMU_VectorSensorToBase(gyro, g_imu_data.gyro_rad_s);
+      IMU_VectorSensorToBase(accel, g_imu_data.accel_m_s2);
+      IMU_VectorSensorToBase(mag, g_imu_data.mag);
       g_imu_data.raw_timestamp_ms = HAL_GetTick();
       g_imu_data.status |= IMU_STATUS_RAW_VALID;
     }
@@ -257,7 +281,7 @@ static void IMU_ParseFrame(const uint8_t *frame, uint16_t length)
 
     if (isfinite(gyro[0]) && isfinite(gyro[1]) && isfinite(gyro[2]))
     {
-      memcpy(g_imu_data.gyro_rad_s, gyro, sizeof(gyro));
+      IMU_VectorSensorToBase(gyro, g_imu_data.gyro_rad_s);
       g_imu_data.raw_timestamp_ms = HAL_GetTick();
       g_imu_data.status |= IMU_STATUS_RAW_VALID;
     }
@@ -265,11 +289,13 @@ static void IMU_ParseFrame(const uint8_t *frame, uint16_t length)
     if (isfinite(norm_squared) && (norm_squared > 0.25f) && (norm_squared < 4.0f))
     {
       float inverse_norm = 1.0f / sqrtf(norm_squared);
+      float normalized_quat[4];
 
       for (uint8_t i = 0U; i < 4U; ++i)
       {
-        g_imu_data.quat[i] = quat[i] * inverse_norm;
+        normalized_quat[i] = quat[i] * inverse_norm;
       }
+      IMU_QuaternionSensorToBase(normalized_quat, g_imu_data.quat);
 
       g_imu_data.quat_timestamp_ms = HAL_GetTick();
       g_imu_data.status |= IMU_STATUS_QUAT_VALID;
