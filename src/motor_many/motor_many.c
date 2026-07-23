@@ -514,6 +514,8 @@ void motor_many_send(port_t portx, many_request_type_t request_type)
     uint8_t data_len_max = get_data_max(id);
     uint8_t *data = p_many_data->data;
 
+    motor_expect_many_feedback(portx, request_type);
+
     while (remaining_len > 0)
     {
         const uint8_t current_data_len = (remaining_len > data_len_max) ? data_len_max : remaining_len;

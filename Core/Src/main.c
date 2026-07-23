@@ -76,6 +76,7 @@ static void MX_WWDG1_Init(void);
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
 static void USB_ConfigureMotorTorqueLimits(void);
+static void USB_ConfigureMotorTimeouts(void);
 static void USB_SendRobotState(void);
 static void IMU_UART_Start(void);
 static void IMU_UART_Process(void);
@@ -105,6 +106,8 @@ static void IMU_UART_Process(void);
 #define USB_CONTROL_MAX_TORQUE          2.0f
 #define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
 #define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
+#define MOTOR_FEEDBACK_TIMEOUT_MS       60U
+#define MOTOR_COMMAND_TIMEOUT_MS        100U
 
 #define IMU_FRAME_HEADER         0xFCU
 #define IMU_FRAME_END            0xFDU
@@ -120,6 +123,10 @@ static void IMU_UART_Process(void);
 
 #define IMU_STATUS_RAW_VALID     0x0001U
 #define IMU_STATUS_QUAT_VALID    0x0002U
+#define MOTOR_STATUS_FEEDBACK_VALID 0x0100U
+#define MOTOR_STATUS_RX_REJECTED    0x0200U
+#define MOTOR_STATUS_COMMAND_TIMEOUT 0x0400U
+#define MOTOR_STATUS_TX_ERROR       0x0800U
 #define IMU_STATUS_RX_OVERFLOW   0x8000U
 
 typedef struct
@@ -137,6 +144,8 @@ static usb_cdc_command_t g_current_command = {0};
 static uint32_t g_last_state_tick = 0U;
 static uint32_t g_last_control_tick = 0U;
 static uint32_t g_last_wwdg_refresh_tick = 0U;
+static uint32_t g_last_usb_command_tick = 0U;
+static uint8_t g_have_usb_command = 0U;
 static imu_data_t g_imu_data = {0};
 static uint8_t g_imu_uart_rx_byte = 0U;
 static uint8_t g_imu_uart_rx_buffer[IMU_UART_RX_BUFFER_SIZE];
@@ -389,13 +398,28 @@ static void USB_ConfigureMotorTorqueLimits(void)
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
 }
 
+static void USB_ConfigureMotorTimeouts(void)
+{
+  /*
+   * The drive stops accepting a stale control stream after this timeout.
+   * This remains effective if USB, the policy process or the MCU loop stops.
+   */
+  motor_many_time_out(PORT1, 1, MOTOR_COMMAND_TIMEOUT_MS);
+  motor_many_time_out(PORT1, 2, MOTOR_COMMAND_TIMEOUT_MS);
+  motor_many_time_out(PORT1, 3, MOTOR_COMMAND_TIMEOUT_MS);
+  motor_many_time_out(PORT2, 1, MOTOR_COMMAND_TIMEOUT_MS);
+  motor_many_time_out(PORT2, 2, MOTOR_COMMAND_TIMEOUT_MS);
+  motor_many_time_out(PORT2, 3, MOTOR_COMMAND_TIMEOUT_MS);
+
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
 static void USB_SendRobotState(void)
 {
   usb_cdc_state_t state = {0};
   uint32_t now = HAL_GetTick();
   uint16_t imu_status = g_imu_data.status & IMU_STATUS_RX_OVERFLOW;
-
-  motor_process_state_all();
 
   state.joint_pos[0] = motor_get_state(PORT1, 1)->position;
   state.joint_pos[1] = motor_get_state(PORT1, 2)->position;
@@ -438,6 +462,23 @@ static void USB_SendRobotState(void)
   state.cmd[2] = 0.0f;
 
   state.timestamp_ms = now;
+  if (motor_all_states_fresh(now, MOTOR_FEEDBACK_TIMEOUT_MS) != 0U)
+  {
+    imu_status |= MOTOR_STATUS_FEEDBACK_VALID;
+  }
+  if (motor_get_rx_reject_count() != 0U)
+  {
+    imu_status |= MOTOR_STATUS_RX_REJECTED;
+  }
+  if ((g_have_usb_command == 0U) ||
+      ((now - g_last_usb_command_tick) > MOTOR_COMMAND_TIMEOUT_MS))
+  {
+    imu_status |= MOTOR_STATUS_COMMAND_TIMEOUT;
+  }
+  if (fdcan_get_tx_error_count() != 0U)
+  {
+    imu_status |= MOTOR_STATUS_TX_ERROR;
+  }
   state.status = imu_status;
 
   (void)USB_CDC_SendState(&state);
@@ -487,16 +528,23 @@ int main(void)
   HAL_GPIO_WritePin(GPIOC, MOTOR2_PWR_EN_Pin | MOTOR1_PWR_EN_Pin, GPIO_PIN_SET);
   HAL_Delay(100);
 
+  USB_ConfigureMotorTimeouts();
+  HAL_Delay(2U);
+  motor_process_state_all();
   USB_ConfigureMotorTorqueLimits();
   HAL_Delay(2U);
+  motor_process_state_all();
   USB_SendRobotState();
-  g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
-  g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
-  g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
-  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
-  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
-  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
-  USB_ApplyCommandToMotors(&g_current_command);
+  if (motor_all_states_fresh(HAL_GetTick(), MOTOR_FEEDBACK_TIMEOUT_MS) != 0U)
+  {
+    g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
+    g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
+    g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
+    g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
+    g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
+    g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
+    USB_ApplyCommandToMotors(&g_current_command);
+  }
   g_last_state_tick = HAL_GetTick();
   g_last_control_tick = g_last_state_tick;
 
@@ -518,16 +566,25 @@ int main(void)
     usb_cdc_command_t received_command;
 
     IMU_UART_Process();
+    motor_process_state_all();
 
     if (USB_CDC_GetLatestCommand(&received_command) != 0U)
     {
       g_current_command = received_command;
+      g_last_usb_command_tick = HAL_GetTick();
+      g_have_usb_command = 1U;
     }
 
     if ((HAL_GetTick() - g_last_control_tick) >= USB_CONTROL_PERIOD_MS)
     {
-      USB_ApplyCommandToMotors(&g_current_command);
-      g_last_control_tick = HAL_GetTick();
+      const uint32_t now = HAL_GetTick();
+      if ((g_have_usb_command != 0U) &&
+          ((now - g_last_usb_command_tick) <= MOTOR_COMMAND_TIMEOUT_MS) &&
+          (motor_all_states_fresh(now, MOTOR_FEEDBACK_TIMEOUT_MS) != 0U))
+      {
+        USB_ApplyCommandToMotors(&g_current_command);
+      }
+      g_last_control_tick = now;
     }
 
     if ((HAL_GetTick() - g_last_state_tick) >= USB_STATE_PERIOD_MS)
@@ -641,7 +698,7 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataTimeSeg1 = 5;
   hfdcan1.Init.DataTimeSeg2 = 2;
   hfdcan1.Init.MessageRAMOffset = 0;
-  hfdcan1.Init.StdFiltersNbr = 0;
+  hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.RxFifo0ElmtsNbr = 10;
   hfdcan1.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64;
@@ -693,8 +750,8 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataSyncJumpWidth = 2;
   hfdcan2.Init.DataTimeSeg1 = 5;
   hfdcan2.Init.DataTimeSeg2 = 2;
-  hfdcan2.Init.MessageRAMOffset = 756;
-  hfdcan2.Init.StdFiltersNbr = 0;
+  hfdcan2.Init.MessageRAMOffset = 757;
+  hfdcan2.Init.StdFiltersNbr = 1;
   hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.RxFifo0ElmtsNbr = 10;
   hfdcan2.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64;

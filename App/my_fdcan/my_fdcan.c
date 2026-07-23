@@ -11,6 +11,8 @@ FDCAN_TxHeaderTypeDef TxHeader =
     .MessageMarker = 0,
 };
 
+static uint32_t fdcan_tx_error_count = 0U;
+
 
 uint32_t get_fdcan_dlc(uint16_t size)
 {
@@ -147,7 +149,29 @@ uint16_t get_fdcan_data_size(uint32_t dlc)
 
 void fdcan_filter_init(FDCAN_HandleTypeDef *fdcanHandle)
 {
-    if (HAL_FDCAN_ConfigGlobalFilter(fdcanHandle, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_FILTER_REMOTE, FDCAN_FILTER_REMOTE) != HAL_OK)
+    /*
+     * The protocol encodes source in ID[15:8] and destination in ID[7:0].
+     * Motor replies to controller address 0 therefore have IDs 0x100,
+     * 0x200 and 0x300.  A standard-ID mask first rejects every frame whose
+     * destination byte is not zero; motor.c then restricts the source to 1~3.
+     */
+    FDCAN_FilterTypeDef filter =
+    {
+        .IdType = FDCAN_STANDARD_ID,
+        .FilterIndex = 0U,
+        .FilterType = FDCAN_FILTER_MASK,
+        .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
+        .FilterID1 = 0x000U,
+        .FilterID2 = 0x0FFU,
+    };
+
+    if (HAL_FDCAN_ConfigFilter(fdcanHandle, &filter) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ConfigGlobalFilter(fdcanHandle, FDCAN_REJECT, FDCAN_REJECT,
+                                     FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK)
     {
         Error_Handler();
     }
@@ -167,7 +191,7 @@ void fdcan_filter_init(FDCAN_HandleTypeDef *fdcanHandle)
 }
 
 
-void fdcan_send(FDCAN_HandleTypeDef *fdcanHandle, uint32_t id, uint8_t *data, uint16_t size)
+HAL_StatusTypeDef fdcan_send(FDCAN_HandleTypeDef *fdcanHandle, uint32_t id, uint8_t *data, uint16_t size)
 {
     TxHeader.Identifier = id;
 
@@ -181,5 +205,17 @@ void fdcan_send(FDCAN_HandleTypeDef *fdcanHandle, uint32_t id, uint8_t *data, ui
         TxHeader.IdType = FDCAN_STANDARD_ID;
     }
     TxHeader.DataLength = get_fdcan_dlc(size);
-    HAL_FDCAN_AddMessageToTxFifoQ(fdcanHandle, &TxHeader, data);
+    const HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(fdcanHandle, &TxHeader, data);
+    if (status != HAL_OK)
+    {
+        fdcan_tx_error_count++;
+    }
+
+    return status;
+}
+
+
+uint32_t fdcan_get_tx_error_count(void)
+{
+    return fdcan_tx_error_count;
 }
