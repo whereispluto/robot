@@ -105,6 +105,7 @@ static void IMU_UART_Process(void);
 #define USB_CONTROL_MAX_TORQUE          2.0f
 #define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
 #define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
+#define MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS 60U
 
 #define IMU_FRAME_HEADER         0xFCU
 #define IMU_FRAME_END            0xFDU
@@ -120,6 +121,10 @@ static void IMU_UART_Process(void);
 
 #define IMU_STATUS_RAW_VALID     0x0001U
 #define IMU_STATUS_QUAT_VALID    0x0002U
+#define MOTOR_STATUS_FEEDBACK_FRESH 0x0100U
+#define MOTOR_STATUS_SUSPECT_FEEDBACK 0x0200U
+#define MOTOR_STATUS_RX_FIFO_LOST 0x0400U
+#define MOTOR_STATUS_TX_ENQUEUE_ERROR 0x0800U
 #define IMU_STATUS_RX_OVERFLOW   0x8000U
 
 typedef struct
@@ -438,6 +443,22 @@ static void USB_SendRobotState(void)
   state.cmd[2] = 0.0f;
 
   state.timestamp_ms = now;
+  if (motor_all_active_states_fresh(now, MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS) != 0U)
+  {
+    imu_status |= MOTOR_STATUS_FEEDBACK_FRESH;
+  }
+  if (motor_get_suspect_count() != 0U)
+  {
+    imu_status |= MOTOR_STATUS_SUSPECT_FEEDBACK;
+  }
+  if (motor_get_rx_lost_count() != 0U)
+  {
+    imu_status |= MOTOR_STATUS_RX_FIFO_LOST;
+  }
+  if (fdcan_get_tx_error_count() != 0U)
+  {
+    imu_status |= MOTOR_STATUS_TX_ENQUEUE_ERROR;
+  }
   state.status = imu_status;
 
   (void)USB_CDC_SendState(&state);
@@ -518,6 +539,7 @@ int main(void)
     usb_cdc_command_t received_command;
 
     IMU_UART_Process();
+    motor_process_state_all();
 
     if (USB_CDC_GetLatestCommand(&received_command) != 0U)
     {

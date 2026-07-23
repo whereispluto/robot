@@ -6,6 +6,7 @@
 
 #define  MOTOR_PORT_NUM  2  // 使用 CAN 通道数量  
 #define  MOTOR_MAX_NUM   6  // 单个 CAN 通道支持的最大电机 ID/一拖多数据槽数量
+#define  MOTOR_ACTIVE_NUM 3 // 本机器人每个 CAN 通道实际使用 ID 1~3
 
 
 #include "stm32h7xx_hal.h"  
@@ -45,6 +46,10 @@ typedef struct
     uint8_t ack;     // 应答，用于电机设置相关的应答
     const motor_type_t model;  // 电机型号（这个参数由用户自定义，此程序根据这个变量进行电机力矩修正）
     version_s version;  // 电机固件版本号
+    uint32_t last_update_ms;  // 最近一次有效的一拖多反馈时间
+    uint32_t accept_count;
+    uint32_t suspect_count;
+    uint8_t valid;
 } motor_state_s, *p_motor_state_s;  // 这个结构体会定义成结构体数组，其中数组下标 +1 即为电机 ID
 
 
@@ -77,6 +82,9 @@ p_motor_state_s motor_get_state_pointer2(port_t portx);
 motor_type_t motor_get_model2(port_t portx, uint8_t id);
 
 void motor_process_state_all(void);
+uint8_t motor_all_active_states_fresh(uint32_t now_ms, uint32_t timeout_ms);
+uint32_t motor_get_suspect_count(void);
+uint32_t motor_get_rx_lost_count(void);
 
 
 

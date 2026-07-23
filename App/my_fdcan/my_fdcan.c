@@ -11,6 +11,8 @@ FDCAN_TxHeaderTypeDef TxHeader =
     .MessageMarker = 0,
 };
 
+static uint32_t fdcan_tx_error_count = 0U;
+
 
 uint32_t get_fdcan_dlc(uint16_t size)
 {
@@ -153,7 +155,11 @@ void fdcan_filter_init(FDCAN_HandleTypeDef *fdcanHandle)
     }
 
     if (HAL_FDCAN_ActivateNotification(
-                fdcanHandle, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_TX_FIFO_EMPTY, 0) != HAL_OK)
+                fdcanHandle,
+                FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                FDCAN_IT_RX_FIFO0_MESSAGE_LOST |
+                FDCAN_IT_TX_FIFO_EMPTY,
+                0) != HAL_OK)
     {
         Error_Handler();
     }
@@ -181,5 +187,14 @@ void fdcan_send(FDCAN_HandleTypeDef *fdcanHandle, uint32_t id, uint8_t *data, ui
         TxHeader.IdType = FDCAN_STANDARD_ID;
     }
     TxHeader.DataLength = get_fdcan_dlc(size);
-    HAL_FDCAN_AddMessageToTxFifoQ(fdcanHandle, &TxHeader, data);
+    if (HAL_FDCAN_AddMessageToTxFifoQ(fdcanHandle, &TxHeader, data) != HAL_OK)
+    {
+        fdcan_tx_error_count++;
+    }
+}
+
+
+uint32_t fdcan_get_tx_error_count(void)
+{
+    return fdcan_tx_error_count;
 }
