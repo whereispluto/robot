@@ -92,14 +92,14 @@ static void IMU_UART_Process(void);
  * Match mjlab's output-side PD law:
  *   torque = (q_des - q) * Kp + (v_des - v) * Kd + torque_ff
  *
- * The motor protocol evaluates position and velocity in turns and turns/s, while
- * mjlab gains use radians and rad/s. The per-turn constants below are the matching
- * values after 2*pi conversion and M4438_30 int16 protocol quantization.
+ * The motor protocol evaluates position and velocity in turns and turns/s. Calling
+ * the M4438_30 int16 path with Kp=Kd=1.0 produces internal gain codes (19, 19),
+ * equivalent to 0.1589384924 in mjlab's radian-based PD law.
  */
-#define USB_CONTROL_KP_NM_PER_RAD       25.2628551029f
-#define USB_CONTROL_KD_NMS_PER_RAD      2.0076441141f
-#define USB_CONTROL_KP_NM_PER_TURN      158.7312f
-#define USB_CONTROL_KD_NMS_PER_TURN     12.6144f
+#define USB_CONTROL_KP_NM_PER_RAD       0.1589384924f
+#define USB_CONTROL_KD_NMS_PER_RAD      0.1589384924f
+#define USB_CONTROL_KP_NM_PER_TURN      1.0f
+#define USB_CONTROL_KD_NMS_PER_TURN     1.0f
 #define USB_CONTROL_TARGET_VELOCITY     0.0f
 #define USB_CONTROL_FEEDFORWARD_TORQUE  0.0f
 #define USB_CONTROL_MAX_TORQUE          2.0f
