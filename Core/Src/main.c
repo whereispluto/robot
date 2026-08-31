@@ -106,6 +106,7 @@ static void IMU_UART_Process(void);
 #define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
 #define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
 #define MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS 60U
+#define ROBOT_JOINT_COUNT 6U
 
 #define IMU_FRAME_HEADER         0xFCU
 #define IMU_FRAME_END            0xFDU
@@ -139,6 +140,10 @@ typedef struct
 } imu_data_t;
 
 static usb_cdc_command_t g_current_command = {0};
+/* Keep this pose synchronized with DEFAULT_JOINT_POS_RAD in pc_32_linux.py. */
+static const float g_startup_joint_pos_deg[ROBOT_JOINT_COUNT] = {
+  10.0f, -20.0f, 10.0f, 10.0f, -20.0f, 10.0f
+};
 static uint32_t g_last_state_tick = 0U;
 static uint32_t g_last_control_tick = 0U;
 static uint32_t g_last_wwdg_refresh_tick = 0U;
@@ -537,12 +542,11 @@ int main(void)
   USB_ConfigureMotorTorqueLimits();
   HAL_Delay(2U);
   USB_SendRobotState();
-  g_current_command.target_joint_pos[0] = motor_get_state(PORT1, 1)->position;
-  g_current_command.target_joint_pos[1] = motor_get_state(PORT1, 2)->position;
-  g_current_command.target_joint_pos[2] = motor_get_state(PORT1, 3)->position;
-  g_current_command.target_joint_pos[3] = motor_get_state(PORT2, 1)->position;
-  g_current_command.target_joint_pos[4] = motor_get_state(PORT2, 2)->position;
-  g_current_command.target_joint_pos[5] = motor_get_state(PORT2, 3)->position;
+
+  /* Move to the policy's default pose immediately after motor power-up. */
+  memcpy(g_current_command.target_joint_pos, g_startup_joint_pos_deg,
+         sizeof(g_startup_joint_pos_deg));
+  g_current_command.flags = USB_CDC_COMMAND_FLAG_STARTUP_TRAJECTORY;
   USB_ApplyCommandToMotors(&g_current_command);
   g_last_state_tick = HAL_GetTick();
   g_last_control_tick = g_last_state_tick;
@@ -562,6 +566,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    
     usb_cdc_command_t received_command;
 
     IMU_UART_Process();
