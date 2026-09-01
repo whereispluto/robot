@@ -74,6 +74,7 @@
 #define USB_CDC_MSG_STATE     0x01U
 #define USB_CDC_MSG_COMMAND   0x02U
 #define USB_CDC_MSG_HEARTBEAT 0x03U
+#define USB_CDC_MSG_GAIN_TEST 0x04U
 
 #define USB_CDC_HEADER_SIZE   10U
 #define USB_CDC_CRC_SIZE      2U
@@ -118,6 +119,8 @@ static uint16_t rx_stream_len = 0;
 
 static volatile uint8_t latest_command_valid = 0;
 static usb_cdc_command_t latest_command;
+static volatile uint8_t latest_gain_test_command_valid = 0;
+static usb_cdc_gain_test_command_t latest_gain_test_command;
 
 static volatile uint8_t tx_busy = 0;
 static uint8_t tx_frame[APP_TX_DATA_SIZE];
@@ -162,6 +165,7 @@ static void USB_CDC_PushRxBytes(const uint8_t *data, uint16_t length);
 static void USB_CDC_CompactRxStream(uint16_t drop_count);
 static void USB_CDC_TryParseRxStream(void);
 static uint8_t USB_CDC_ParseCommandFrame(const uint8_t *payload, uint16_t payload_length, uint16_t seq);
+static uint8_t USB_CDC_ParseGainTestFrame(const uint8_t *payload, uint16_t payload_length);
 static uint8_t USB_CDC_PackStateFrame(const usb_cdc_state_t *state, uint8_t *frame, uint16_t *frame_length);
 
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
@@ -193,6 +197,7 @@ static int8_t CDC_Init_HS(void)
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, UserRxBufferHS);
   USB_CDC_ResetRxStream();
   latest_command_valid = 0;
+  latest_gain_test_command_valid = 0;
   tx_busy = 0;
   return (USBD_OK);
   /* USER CODE END 8 */
@@ -378,6 +383,21 @@ uint8_t USB_CDC_GetLatestCommand(usb_cdc_command_t *command)
   return 1U;
 }
 
+uint8_t USB_CDC_GetLatestGainTestCommand(usb_cdc_gain_test_command_t *command)
+{
+  if ((command == NULL) || (latest_gain_test_command_valid == 0U))
+  {
+    return 0U;
+  }
+
+  __disable_irq();
+  *command = latest_gain_test_command;
+  latest_gain_test_command_valid = 0U;
+  __enable_irq();
+
+  return 1U;
+}
+
 uint8_t USB_CDC_SendState(const usb_cdc_state_t *state)
 {
   uint16_t frame_length = 0U;
@@ -525,6 +545,10 @@ static void USB_CDC_TryParseRxStream(void)
       {
         (void)USB_CDC_ParseCommandFrame(payload, payload_length, seq);
       }
+      else if (msg_id == USB_CDC_MSG_GAIN_TEST)
+      {
+        (void)USB_CDC_ParseGainTestFrame(payload, payload_length);
+      }
     }
 
     USB_CDC_CompactRxStream((uint16_t)frame_length);
@@ -548,6 +572,31 @@ static uint8_t USB_CDC_ParseCommandFrame(const uint8_t *payload, uint16_t payloa
   __disable_irq();
   latest_command = command;
   latest_command_valid = 1U;
+  __enable_irq();
+
+  return 1U;
+}
+
+static uint8_t USB_CDC_ParseGainTestFrame(const uint8_t *payload, uint16_t payload_length)
+{
+  usb_cdc_gain_test_command_t command;
+
+  if ((payload == NULL) || (payload_length != 20U))
+  {
+    return 0U;
+  }
+
+  command.joint_index = payload[0];
+  command.flags = payload[1];
+  command.reserved = (uint16_t)payload[2] | ((uint16_t)payload[3] << 8);
+  memcpy(&command.target_position_deg, &payload[4], sizeof(float));
+  memcpy(&command.kp_nm_per_rad, &payload[8], sizeof(float));
+  memcpy(&command.kd_nms_per_rad, &payload[12], sizeof(float));
+  memcpy(&command.max_torque_nm, &payload[16], sizeof(float));
+
+  __disable_irq();
+  latest_gain_test_command = command;
+  latest_gain_test_command_valid = 1U;
   __enable_irq();
 
   return 1U;

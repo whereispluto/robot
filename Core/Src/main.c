@@ -75,7 +75,10 @@ static void MX_WWDG1_Init(void);
 /* USER CODE BEGIN PFP */
 
 static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command);
+static void USB_ApplyGainTestCommandToMotors(const usb_cdc_gain_test_command_t *command,
+                                              uint8_t command_fresh);
 static void USB_ConfigureMotorTorqueLimits(void);
+static void USB_ConfigureTorqueLimits(float max_torque_nm);
 static void USB_SendRobotState(void);
 static void IMU_UART_Start(void);
 static void IMU_UART_Process(void);
@@ -105,6 +108,11 @@ static void IMU_UART_Process(void);
 #define USB_CONTROL_MAX_TORQUE          2.0f
 #define USB_STARTUP_MAX_VELOCITY_DEG_S  20.0f
 #define USB_STARTUP_ACCELERATION_DEG_S2 40.0f
+#define USB_GAIN_TEST_COMMAND_TIMEOUT_MS 100U
+#define USB_GAIN_TEST_MAX_TORQUE_NM      2.0f
+#define USB_GAIN_TEST_MAX_KP_NM_PER_RAD  100.0f
+#define USB_GAIN_TEST_MAX_KD_NMS_PER_RAD 10.0f
+#define USB_TWO_PI                       6.2831853071795864769f
 #define MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS 60U
 #define ROBOT_JOINT_COUNT 6U
 
@@ -126,6 +134,7 @@ static void IMU_UART_Process(void);
 #define MOTOR_STATUS_SUSPECT_FEEDBACK 0x0200U
 #define MOTOR_STATUS_RX_FIFO_LOST 0x0400U
 #define MOTOR_STATUS_TX_ENQUEUE_ERROR 0x0800U
+#define MOTOR_STATUS_GAIN_TEST_ACTIVE 0x1000U
 #define IMU_STATUS_RX_OVERFLOW   0x8000U
 
 typedef struct
@@ -140,9 +149,19 @@ typedef struct
 } imu_data_t;
 
 static usb_cdc_command_t g_current_command = {0};
+static usb_cdc_gain_test_command_t g_gain_test_command = {0};
+static uint8_t g_gain_test_active = 0U;
+static uint32_t g_last_gain_test_command_tick = 0U;
+static float g_configured_max_torque_nm = USB_CONTROL_MAX_TORQUE;
 /* Keep this pose synchronized with DEFAULT_JOINT_POS_RAD in pc_32_linux.py. */
 static const float g_startup_joint_pos_deg[ROBOT_JOINT_COUNT] = {
   10.0f, -20.0f, 10.0f, 10.0f, -20.0f, 10.0f
+};
+static const float g_joint_min_deg[ROBOT_JOINT_COUNT] = {
+  -60.0f, -120.0f, -45.0f, -60.0f, -120.0f, -45.0f
+};
+static const float g_joint_max_deg[ROBOT_JOINT_COUNT] = {
+  60.0f, 0.0f, 45.0f, 60.0f, 0.0f, 45.0f
 };
 static uint32_t g_last_state_tick = 0U;
 static uint32_t g_last_control_tick = 0U;
@@ -406,23 +425,124 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
 }
 
+static p_motor_state_s USB_GetJointMotorState(uint8_t joint_index)
+{
+  if (joint_index >= ROBOT_JOINT_COUNT)
+  {
+    return NULL;
+  }
+
+  if (joint_index < 3U)
+  {
+    return motor_get_state(PORT1, (uint8_t)(joint_index + 1U));
+  }
+
+  return motor_get_state(PORT2, (uint8_t)(joint_index - 2U));
+}
+
+static void USB_SetGainTestMotor(uint8_t joint_index, float target_position_deg,
+                                 float kp_nm_per_turn, float kd_nms_per_turn)
+{
+  if (joint_index < 3U)
+  {
+    motor_many_pos_vel_tqe_kp_kd_2(
+        PORT1, (uint8_t)(joint_index + 1U), target_position_deg,
+        USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE,
+        kp_nm_per_turn, kd_nms_per_turn);
+  }
+  else
+  {
+    motor_many_pos_vel_tqe_kp_kd_2(
+        PORT2, (uint8_t)(joint_index - 2U), target_position_deg,
+        USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE,
+        kp_nm_per_turn, kd_nms_per_turn);
+  }
+}
+
+static void USB_ApplyGainTestCommandToMotors(
+    const usb_cdc_gain_test_command_t *command, uint8_t command_fresh)
+{
+  uint8_t selected_joint = ROBOT_JOINT_COUNT;
+  float selected_target_deg = 0.0f;
+  float kp_nm_per_turn = 0.0f;
+  float kd_nms_per_turn = 0.0f;
+  uint8_t feedback_fresh = motor_all_active_states_fresh(
+      HAL_GetTick(), MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS);
+
+  if ((command != NULL) && (command_fresh != 0U) &&
+      ((command->flags & USB_CDC_GAIN_TEST_FLAG_ENABLE) != 0U) &&
+      (command->joint_index < ROBOT_JOINT_COUNT) &&
+      isfinite(command->target_position_deg) &&
+      isfinite(command->kp_nm_per_rad) &&
+      isfinite(command->kd_nms_per_rad) &&
+      (command->kp_nm_per_rad >= 0.0f) &&
+      (command->kp_nm_per_rad <= USB_GAIN_TEST_MAX_KP_NM_PER_RAD) &&
+      (command->kd_nms_per_rad >= 0.0f) &&
+      (command->kd_nms_per_rad <= USB_GAIN_TEST_MAX_KD_NMS_PER_RAD) &&
+      (feedback_fresh != 0U))
+  {
+    selected_joint = command->joint_index;
+    selected_target_deg = fmaxf(
+        g_joint_min_deg[selected_joint],
+        fminf(g_joint_max_deg[selected_joint], command->target_position_deg));
+
+    /*
+     * The motor protocol computes position and velocity errors in turns and
+     * turns/s. Multiplying the SI gains by 2*pi preserves the requested
+     * N*m/rad and N*m*s/rad gains before the vendor pid_adjust() conversion.
+     */
+    kp_nm_per_turn = command->kp_nm_per_rad * USB_TWO_PI;
+    kd_nms_per_turn = command->kd_nms_per_rad * USB_TWO_PI;
+  }
+
+  for (uint8_t joint = 0U; joint < ROBOT_JOINT_COUNT; ++joint)
+  {
+    p_motor_state_s motor_state = USB_GetJointMotorState(joint);
+    float target_position_deg =
+        (motor_state != NULL) ? motor_state->position : 0.0f;
+    float joint_kp = 0.0f;
+    float joint_kd = 0.0f;
+
+    if (joint == selected_joint)
+    {
+      target_position_deg = selected_target_deg;
+      joint_kp = kp_nm_per_turn;
+      joint_kd = kd_nms_per_turn;
+    }
+
+    USB_SetGainTestMotor(joint, target_position_deg, joint_kp, joint_kd);
+  }
+
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
 static void USB_ConfigureMotorTorqueLimits(void)
 {
+  USB_ConfigureTorqueLimits(USB_CONTROL_MAX_TORQUE);
+}
+
+static void USB_ConfigureTorqueLimits(float max_torque_nm)
+{
+  max_torque_nm = fmaxf(0.0f, fminf(USB_GAIN_TEST_MAX_TORQUE_NM,
+                                   max_torque_nm));
+
   /*
    * True motion-control packets do not carry register 0x025 (maximum torque).
    * Seed it through the position/velocity/maximum-torque mode before entering
    * true motion control. NAN means no position target and zero velocity prevents
    * an intentional startup motion; the same frames request the initial states.
    */
-  motor_many_pos_vel_MAXtqe(PORT1, 1, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT1, 2, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT1, 3, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 1, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 2, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
-  motor_many_pos_vel_MAXtqe(PORT2, 3, NAN_FLOAT, 0.0f, USB_CONTROL_MAX_TORQUE);
+  motor_many_pos_vel_MAXtqe(PORT1, 1, NAN_FLOAT, 0.0f, max_torque_nm);
+  motor_many_pos_vel_MAXtqe(PORT1, 2, NAN_FLOAT, 0.0f, max_torque_nm);
+  motor_many_pos_vel_MAXtqe(PORT1, 3, NAN_FLOAT, 0.0f, max_torque_nm);
+  motor_many_pos_vel_MAXtqe(PORT2, 1, NAN_FLOAT, 0.0f, max_torque_nm);
+  motor_many_pos_vel_MAXtqe(PORT2, 2, NAN_FLOAT, 0.0f, max_torque_nm);
+  motor_many_pos_vel_MAXtqe(PORT2, 3, NAN_FLOAT, 0.0f, max_torque_nm);
 
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  g_configured_max_torque_nm = max_torque_nm;
 }
 
 static void USB_SendRobotState(void)
@@ -472,6 +592,20 @@ static void USB_SendRobotState(void)
   state.cmd[0] = 0.0f;
   state.cmd[1] = 0.0f;
   state.cmd[2] = 0.0f;
+
+  if ((g_gain_test_active != 0U) &&
+      (g_gain_test_command.joint_index < ROBOT_JOINT_COUNT))
+  {
+    p_motor_state_s selected_state = USB_GetJointMotorState(
+        g_gain_test_command.joint_index);
+    if (selected_state != NULL)
+    {
+      state.cmd[0] = selected_state->torque;
+    }
+    state.cmd[1] = g_gain_test_command.kp_nm_per_rad;
+    state.cmd[2] = g_gain_test_command.kd_nms_per_rad;
+    imu_status |= MOTOR_STATUS_GAIN_TEST_ACTIVE;
+  }
 
   state.timestamp_ms = now;
   if (motor_all_active_states_fresh(now, MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS) != 0U)
@@ -568,18 +702,70 @@ int main(void)
     /* USER CODE BEGIN 3 */
     
     usb_cdc_command_t received_command;
+    usb_cdc_gain_test_command_t received_gain_test_command;
 
     IMU_UART_Process();
     motor_process_state_all();
 
     if (USB_CDC_GetLatestCommand(&received_command) != 0U)
     {
+      if (g_gain_test_active != 0U)
+      {
+        USB_ConfigureMotorTorqueLimits();
+        g_gain_test_active = 0U;
+      }
       g_current_command = received_command;
+    }
+
+    if (USB_CDC_GetLatestGainTestCommand(&received_gain_test_command) != 0U)
+    {
+      uint8_t command_valid =
+          (received_gain_test_command.joint_index < ROBOT_JOINT_COUNT) &&
+          isfinite(received_gain_test_command.target_position_deg) &&
+          isfinite(received_gain_test_command.kp_nm_per_rad) &&
+          isfinite(received_gain_test_command.kd_nms_per_rad) &&
+          isfinite(received_gain_test_command.max_torque_nm) &&
+          (received_gain_test_command.kp_nm_per_rad >= 0.0f) &&
+          (received_gain_test_command.kp_nm_per_rad <=
+           USB_GAIN_TEST_MAX_KP_NM_PER_RAD) &&
+          (received_gain_test_command.kd_nms_per_rad >= 0.0f) &&
+          (received_gain_test_command.kd_nms_per_rad <=
+           USB_GAIN_TEST_MAX_KD_NMS_PER_RAD) &&
+          (received_gain_test_command.max_torque_nm >= 0.0f) &&
+          (received_gain_test_command.max_torque_nm <=
+           USB_GAIN_TEST_MAX_TORQUE_NM);
+
+      if (command_valid == 0U)
+      {
+        received_gain_test_command.flags = 0U;
+        received_gain_test_command.max_torque_nm = 0.0f;
+      }
+
+      if ((g_gain_test_active == 0U) ||
+          (fabsf(received_gain_test_command.max_torque_nm -
+                 g_configured_max_torque_nm) > 0.0001f))
+      {
+        USB_ConfigureTorqueLimits(received_gain_test_command.max_torque_nm);
+      }
+
+      g_gain_test_command = received_gain_test_command;
+      g_gain_test_active = 1U;
+      g_last_gain_test_command_tick = HAL_GetTick();
     }
 
     if ((HAL_GetTick() - g_last_control_tick) >= USB_CONTROL_PERIOD_MS)
     {
-      USB_ApplyCommandToMotors(&g_current_command);
+      if (g_gain_test_active != 0U)
+      {
+        uint8_t command_fresh =
+            ((HAL_GetTick() - g_last_gain_test_command_tick) <=
+             USB_GAIN_TEST_COMMAND_TIMEOUT_MS) ? 1U : 0U;
+        USB_ApplyGainTestCommandToMotors(&g_gain_test_command, command_fresh);
+      }
+      else
+      {
+        USB_ApplyCommandToMotors(&g_current_command);
+      }
       g_last_control_tick = HAL_GetTick();
     }
 

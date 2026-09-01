@@ -55,6 +55,7 @@
 
 /* Select the motor's trapezoidal position/velocity/acceleration mode. */
 #define USB_CDC_COMMAND_FLAG_STARTUP_TRAJECTORY  0x0001U
+#define USB_CDC_GAIN_TEST_FLAG_ENABLE             0x01U
 
 /* USER CODE END EXPORTED_DEFINES */
 
@@ -75,6 +76,17 @@ typedef struct
   uint16_t seq;
   uint16_t flags;
 } usb_cdc_command_t;
+
+typedef struct
+{
+  uint8_t joint_index;
+  uint8_t flags;
+  uint16_t reserved;
+  float target_position_deg;
+  float kp_nm_per_rad;
+  float kd_nms_per_rad;
+  float max_torque_nm;
+} usb_cdc_gain_test_command_t;
 
 typedef struct
 {
@@ -133,6 +145,7 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len);
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
 
 uint8_t USB_CDC_GetLatestCommand(usb_cdc_command_t *command);
+uint8_t USB_CDC_GetLatestGainTestCommand(usb_cdc_gain_test_command_t *command);
 uint8_t USB_CDC_SendState(const usb_cdc_state_t *state);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
