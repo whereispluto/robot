@@ -73,6 +73,8 @@
 typedef struct
 {
   float target_joint_pos[6];
+  float kp_nm_per_rad;
+  float kd_nms_per_rad;
   uint16_t seq;
   uint16_t flags;
 } usb_cdc_command_t;

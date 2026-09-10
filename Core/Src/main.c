@@ -91,18 +91,6 @@ static void IMU_UART_Process(void);
 #define USB_STATE_PERIOD_MS 20U
 #define USB_CONTROL_PERIOD_MS 20U
 #define WWDG_REFRESH_PERIOD_MS 100U
-/*
- * Match mjlab's output-side PD law:
- *   torque = (q_des - q) * Kp + (v_des - v) * Kd + torque_ff
- *
- * The motor protocol evaluates position and velocity in turns and turns/s. Calling
- * the M4438_30 int16 path with Kp=Kd=1.0 produces internal gain codes (19, 19),
- * equivalent to 0.1589384924 in mjlab's radian-based PD law.
- */
-#define USB_CONTROL_KP_NM_PER_RAD       0.1589384924f
-#define USB_CONTROL_KD_NMS_PER_RAD      0.1589384924f
-#define USB_CONTROL_KP_NM_PER_TURN      1.0f
-#define USB_CONTROL_KD_NMS_PER_TURN     1.0f
 #define USB_CONTROL_TARGET_VELOCITY     0.0f
 #define USB_CONTROL_FEEDFORWARD_TORQUE  0.0f
 #define USB_CONTROL_MAX_TORQUE          2.0f
@@ -413,12 +401,28 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
   }
   else
   {
-    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
-    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, USB_CONTROL_KP_NM_PER_TURN, USB_CONTROL_KD_NMS_PER_TURN);
+    float kp_nm_per_turn;
+    float kd_nms_per_turn;
+
+    if (!isfinite(command->kp_nm_per_rad) ||
+        !isfinite(command->kd_nms_per_rad) ||
+        (command->kp_nm_per_rad < 0.0f) ||
+        (command->kp_nm_per_rad > USB_GAIN_TEST_MAX_KP_NM_PER_RAD) ||
+        (command->kd_nms_per_rad < 0.0f) ||
+        (command->kd_nms_per_rad > USB_GAIN_TEST_MAX_KD_NMS_PER_RAD))
+    {
+      return;
+    }
+
+    /* The drive evaluates errors in turns; convert the PC's SI radian gains. */
+    kp_nm_per_turn = command->kp_nm_per_rad * USB_TWO_PI;
+    kd_nms_per_turn = command->kd_nms_per_rad * USB_TWO_PI;
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, command->target_joint_pos[0], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 2, command->target_joint_pos[1], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT1, 3, command->target_joint_pos[2], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 1, command->target_joint_pos[3], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 2, command->target_joint_pos[4], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
+    motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
   }
 
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);

@@ -70,7 +70,7 @@
 #define USB_CDC_MAGIC_2   '3'
 #define USB_CDC_MAGIC_3   '2'
 
-#define USB_CDC_VERSION   1U
+#define USB_CDC_VERSION   2U
 #define USB_CDC_MSG_STATE     0x01U
 #define USB_CDC_MSG_COMMAND   0x02U
 #define USB_CDC_MSG_HEARTBEAT 0x03U
@@ -559,15 +559,17 @@ static uint8_t USB_CDC_ParseCommandFrame(const uint8_t *payload, uint16_t payloa
 {
   UNUSED(seq);
 
-  if ((payload == NULL) || (payload_length != 28U))
+  if ((payload == NULL) || (payload_length != 36U))
   {
     return 0U;
   }
 
   usb_cdc_command_t command;
   memcpy(command.target_joint_pos, payload, sizeof(command.target_joint_pos));
-  command.seq = (uint16_t)payload[24] | ((uint16_t)payload[25] << 8);
-  command.flags = (uint16_t)payload[26] | ((uint16_t)payload[27] << 8);
+  memcpy(&command.kp_nm_per_rad, &payload[24], sizeof(command.kp_nm_per_rad));
+  memcpy(&command.kd_nms_per_rad, &payload[28], sizeof(command.kd_nms_per_rad));
+  command.seq = (uint16_t)payload[32] | ((uint16_t)payload[33] << 8);
+  command.flags = (uint16_t)payload[34] | ((uint16_t)payload[35] << 8);
 
   __disable_irq();
   latest_command = command;
