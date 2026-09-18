@@ -102,6 +102,33 @@ typedef struct
   uint16_t status;
 } usb_cdc_state_t;
 
+/* 0x05 command, 0x06 per-motor telemetry; explicitly serialized, no padding. */
+typedef struct
+{
+  float target[6];
+  float kp;
+  float kd;
+  float max_torque;
+  uint16_t flags; /* bit 0: enable */
+  uint16_t seq;
+} usb_cdc_motors_test_command_t;
+
+typedef struct
+{
+  float target, position, velocity, torque;
+  uint32_t age_ms, accept_count, suspect_count;
+  uint8_t valid, fault;
+} usb_cdc_motor_diagnostic_t;
+
+typedef struct
+{
+  uint32_t timestamp_ms;
+  uint16_t command_seq;
+  uint16_t flags; /* bit 0: service active; bit 1: command fresh; bit 2: PD enabled */
+  uint32_t rx_lost_count, tx_error_count;
+  usb_cdc_motor_diagnostic_t motors[6];
+} usb_cdc_motors_test_state_t;
+
 /* USER CODE END EXPORTED_TYPES */
 
 /**
@@ -149,6 +176,8 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len);
 uint8_t USB_CDC_GetLatestCommand(usb_cdc_command_t *command);
 uint8_t USB_CDC_GetLatestGainTestCommand(usb_cdc_gain_test_command_t *command);
 uint8_t USB_CDC_SendState(const usb_cdc_state_t *state);
+uint8_t USB_CDC_GetLatestMotorsTestCommand(usb_cdc_motors_test_command_t *command);
+uint8_t USB_CDC_SendMotorsTestState(const usb_cdc_motors_test_state_t *state);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 

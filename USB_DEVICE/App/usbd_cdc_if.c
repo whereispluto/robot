@@ -75,6 +75,8 @@
 #define USB_CDC_MSG_COMMAND   0x02U
 #define USB_CDC_MSG_HEARTBEAT 0x03U
 #define USB_CDC_MSG_GAIN_TEST 0x04U
+#define USB_CDC_MSG_MOTORS_TEST 0x05U
+#define USB_CDC_MSG_MOTORS_STATE 0x06U
 
 #define USB_CDC_HEADER_SIZE   10U
 #define USB_CDC_CRC_SIZE      2U
@@ -121,6 +123,9 @@ static volatile uint8_t latest_command_valid = 0;
 static usb_cdc_command_t latest_command;
 static volatile uint8_t latest_gain_test_command_valid = 0;
 static usb_cdc_gain_test_command_t latest_gain_test_command;
+
+static volatile uint8_t latest_motors_test_valid = 0;
+static usb_cdc_motors_test_command_t latest_motors_test;
 
 static volatile uint8_t tx_busy = 0;
 static uint8_t tx_frame[APP_TX_DATA_SIZE];
@@ -198,6 +203,7 @@ static int8_t CDC_Init_HS(void)
   USB_CDC_ResetRxStream();
   latest_command_valid = 0;
   latest_gain_test_command_valid = 0;
+  latest_motors_test_valid = 0;
   tx_busy = 0;
   return (USBD_OK);
   /* USER CODE END 8 */
@@ -398,6 +404,60 @@ uint8_t USB_CDC_GetLatestGainTestCommand(usb_cdc_gain_test_command_t *command)
   return 1U;
 }
 
+uint8_t USB_CDC_GetLatestMotorsTestCommand(usb_cdc_motors_test_command_t *command)
+{
+  if (command == NULL || latest_motors_test_valid == 0U) return 0U;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  *command = latest_motors_test;
+  latest_motors_test_valid = 0U;
+  __set_PRIMASK(primask);
+  return 1U;
+}
+
+uint8_t USB_CDC_SendMotorsTestState(const usb_cdc_motors_test_state_t *state)
+{
+  static uint16_t sequence = 0U;
+  const uint16_t payload_length = 196U;
+  uint16_t offset = USB_CDC_HEADER_SIZE;
+  /* Advance even on a busy endpoint so the host can detect dropped frames. */
+  uint16_t seq = sequence++;
+  if (state == NULL || tx_busy != 0U) return USBD_BUSY;
+  memcpy(tx_frame, "RB32", 4U);
+  tx_frame[4] = USB_CDC_VERSION;
+  tx_frame[5] = USB_CDC_MSG_MOTORS_STATE;
+  memcpy(&tx_frame[6], &seq, 2U);
+  memcpy(&tx_frame[8], &payload_length, 2U);
+#define COPY_FIELD(field) do { memcpy(&tx_frame[offset], &(field), sizeof(field)); offset += sizeof(field); } while (0)
+  COPY_FIELD(state->timestamp_ms);
+  COPY_FIELD(state->command_seq);
+  COPY_FIELD(state->flags);
+  COPY_FIELD(state->rx_lost_count);
+  COPY_FIELD(state->tx_error_count);
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    COPY_FIELD(state->motors[i].target);
+    COPY_FIELD(state->motors[i].position);
+    COPY_FIELD(state->motors[i].velocity);
+    COPY_FIELD(state->motors[i].torque);
+    COPY_FIELD(state->motors[i].age_ms);
+    COPY_FIELD(state->motors[i].accept_count);
+    COPY_FIELD(state->motors[i].suspect_count);
+    COPY_FIELD(state->motors[i].valid);
+    COPY_FIELD(state->motors[i].fault);
+  }
+#undef COPY_FIELD
+  uint16_t crc = USB_CDC_Crc16Ccitt(tx_frame, offset);
+  memcpy(&tx_frame[offset], &crc, 2U);
+  tx_busy = 1U;
+  if (CDC_Transmit_HS(tx_frame, offset + 2U) != USBD_OK)
+  {
+    tx_busy = 0U;
+    return USBD_BUSY;
+  }
+  return USBD_OK;
+}
+
 uint8_t USB_CDC_SendState(const usb_cdc_state_t *state)
 {
   uint16_t frame_length = 0U;
@@ -527,12 +587,14 @@ static void USB_CDC_TryParseRxStream(void)
     uint16_t payload_length = (uint16_t)rx_stream[8] | ((uint16_t)rx_stream[9] << 8);
     uint32_t frame_length = (uint32_t)USB_CDC_HEADER_SIZE + (uint32_t)payload_length + (uint32_t)USB_CDC_CRC_SIZE;
 
-    if ((version != USB_CDC_VERSION) || (payload_length > (APP_RX_DATA_SIZE - USB_CDC_HEADER_SIZE - USB_CDC_CRC_SIZE)) ||
-        (frame_length > rx_stream_len))
+    if ((version != USB_CDC_VERSION) || (payload_length > (APP_RX_DATA_SIZE - USB_CDC_HEADER_SIZE - USB_CDC_CRC_SIZE)))
     {
       USB_CDC_CompactRxStream(1U);
       continue;
     }
+
+    /* A USB transfer can split a frame at any byte. Wait for its tail. */
+    if (frame_length > rx_stream_len) break;
 
     uint16_t received_crc = (uint16_t)rx_stream[USB_CDC_HEADER_SIZE + payload_length] |
                             ((uint16_t)rx_stream[USB_CDC_HEADER_SIZE + payload_length + 1U] << 8);
@@ -544,6 +606,17 @@ static void USB_CDC_TryParseRxStream(void)
       if (msg_id == USB_CDC_MSG_COMMAND)
       {
         (void)USB_CDC_ParseCommandFrame(payload, payload_length, seq);
+      }
+      else if (msg_id == USB_CDC_MSG_MOTORS_TEST && payload_length == 38U)
+      {
+        /* floats occupy bytes 0..35, flags bytes 36..37; seq is in header. */
+        memcpy(latest_motors_test.target, payload, 24U);
+        memcpy(&latest_motors_test.kp, &payload[24], 4U);
+        memcpy(&latest_motors_test.kd, &payload[28], 4U);
+        memcpy(&latest_motors_test.max_torque, &payload[32], 4U);
+        memcpy(&latest_motors_test.flags, &payload[36], 2U);
+        latest_motors_test.seq = seq;
+        latest_motors_test_valid = 1U;
       }
       else if (msg_id == USB_CDC_MSG_GAIN_TEST)
       {

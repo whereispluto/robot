@@ -88,8 +88,9 @@ static void IMU_UART_Process(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* PC state feedback stays at 50 Hz; motor commands run at 500 Hz. */
 #define USB_STATE_PERIOD_MS 20U
-#define USB_CONTROL_PERIOD_MS 20U
+#define USB_CONTROL_PERIOD_MS 2U
 #define WWDG_REFRESH_PERIOD_MS 100U
 #define USB_CONTROL_TARGET_VELOCITY     0.0f
 #define USB_CONTROL_FEEDFORWARD_TORQUE  0.0f
@@ -139,6 +140,12 @@ typedef struct
 static usb_cdc_command_t g_current_command = {0};
 static usb_cdc_gain_test_command_t g_gain_test_command = {0};
 static uint8_t g_gain_test_active = 0U;
+static usb_cdc_motors_test_command_t g_motors_test_command = {0};
+static uint8_t g_motors_test_active = 0U;
+static uint32_t g_motors_test_tick = 0U;
+static uint16_t g_motors_test_applied_seq = 0U;
+static uint16_t g_motors_test_flags = 1U;
+static float g_motors_test_target[6] = {0};
 static uint32_t g_last_gain_test_command_tick = 0U;
 static float g_configured_max_torque_nm = USB_CONTROL_MAX_TORQUE;
 /* Keep this pose synchronized with DEFAULT_JOINT_POS_RAD in pc_32_linux.py. */
@@ -549,6 +556,67 @@ static void USB_ConfigureTorqueLimits(float max_torque_nm)
   g_configured_max_torque_nm = max_torque_nm;
 }
 
+static uint8_t USB_MotorsTestCommandValid(const usb_cdc_motors_test_command_t *c)
+{
+  if (!isfinite(c->kp) || c->kp < 0.0f || c->kp > 100.0f ||
+      !isfinite(c->kd) || c->kd < 0.0f || c->kd > 10.0f ||
+      !isfinite(c->max_torque) || c->max_torque < 0.0f || c->max_torque > 2.0f ||
+      (c->flags & ~1U) != 0U) return 0U;
+  for (uint8_t i = 0U; i < 6U; ++i)
+    if (!isfinite(c->target[i]) || c->target[i] < g_joint_min_deg[i] ||
+        c->target[i] > g_joint_max_deg[i]) return 0U;
+  return 1U;
+}
+
+static void USB_ApplyMotorsTest(void)
+{
+  uint32_t now = HAL_GetTick();
+  uint8_t fresh = (now - g_motors_test_tick) <= USB_GAIN_TEST_COMMAND_TIMEOUT_MS;
+  uint8_t enabled = fresh && (g_motors_test_command.flags & 1U) &&
+      motor_all_active_states_fresh(now, MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS);
+  for (uint8_t i = 0U; i < 6U; ++i)
+    if (USB_GetJointMotorState(i)->fault != 0U) enabled = 0U;
+  g_motors_test_flags = 1U | (fresh ? 2U : 0U) | (enabled ? 4U : 0U);
+  g_motors_test_applied_seq = g_motors_test_command.seq;
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    float target = enabled ? g_motors_test_command.target[i] : USB_GetJointMotorState(i)->position;
+    g_motors_test_target[i] = target;
+    USB_SetGainTestMotor(i, target,
+        enabled ? g_motors_test_command.kp * USB_TWO_PI : 0.0f,
+        enabled ? g_motors_test_command.kd * USB_TWO_PI : 0.0f);
+  }
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+}
+
+static void USB_SendMotorsTestState(void)
+{
+  usb_cdc_motors_test_state_t state = {0};
+  motor_process_state_all();
+  uint32_t now = HAL_GetTick();
+  state.timestamp_ms = now;
+  state.command_seq = g_motors_test_applied_seq;
+  state.flags = g_motors_test_flags;
+  state.rx_lost_count = motor_get_rx_lost_count();
+  state.tx_error_count = fdcan_get_tx_error_count();
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    p_motor_state_s m = USB_GetJointMotorState(i);
+    usb_cdc_motor_diagnostic_t *d = &state.motors[i];
+    d->target = g_motors_test_target[i];
+    d->position = m->position;
+    d->velocity = m->velocity;
+    d->torque = m->torque;
+    d->age_ms = m->valid ? now - m->last_update_ms : UINT32_MAX;
+    d->accept_count = m->accept_count;
+    d->suspect_count = m->suspect_count;
+    d->valid = m->valid;
+    d->fault = m->fault;
+  }
+  (void)USB_CDC_SendMotorsTestState(&state);
+}
+
 static void USB_SendRobotState(void)
 {
   usb_cdc_state_t state = {0};
@@ -713,8 +781,9 @@ int main(void)
 
     if (USB_CDC_GetLatestCommand(&received_command) != 0U)
     {
-      if (g_gain_test_active != 0U)
+      if (g_gain_test_active != 0U || g_motors_test_active != 0U)
       {
+        g_motors_test_active = 0U;
         USB_ConfigureMotorTorqueLimits();
         g_gain_test_active = 0U;
       }
@@ -723,6 +792,7 @@ int main(void)
 
     if (USB_CDC_GetLatestGainTestCommand(&received_gain_test_command) != 0U)
     {
+      g_motors_test_active = 0U;
       uint8_t command_valid =
           (received_gain_test_command.joint_index < ROBOT_JOINT_COUNT) &&
           isfinite(received_gain_test_command.target_position_deg) &&
@@ -757,9 +827,33 @@ int main(void)
       g_last_gain_test_command_tick = HAL_GetTick();
     }
 
-    if ((HAL_GetTick() - g_last_control_tick) >= USB_CONTROL_PERIOD_MS)
+    usb_cdc_motors_test_command_t motors_command;
+    if (USB_CDC_GetLatestMotorsTestCommand(&motors_command) != 0U)
     {
-      if (g_gain_test_active != 0U)
+      if (!USB_MotorsTestCommandValid(&motors_command))
+      {
+        motors_command.flags = 0U;
+        motors_command.kp = motors_command.kd = motors_command.max_torque = 0.0f;
+      }
+      if (!g_motors_test_active || fabsf(motors_command.max_torque - g_configured_max_torque_nm) > 0.0001f)
+        USB_ConfigureTorqueLimits(motors_command.max_torque);
+      g_gain_test_active = 0U;
+      g_motors_test_active = 1U;
+      g_motors_test_command = motors_command;
+      g_motors_test_tick = HAL_GetTick();
+    }
+
+    uint32_t control_elapsed_ms = HAL_GetTick() - g_last_control_tick;
+    if (control_elapsed_ms >= USB_CONTROL_PERIOD_MS)
+    {
+      /* Keep the 2 ms schedule; skip missed slots instead of bursting CAN frames. */
+      g_last_control_tick += control_elapsed_ms -
+                             (control_elapsed_ms % USB_CONTROL_PERIOD_MS);
+      if (g_motors_test_active != 0U)
+      {
+        USB_ApplyMotorsTest();
+      }
+      else if (g_gain_test_active != 0U)
       {
         uint8_t command_fresh =
             ((HAL_GetTick() - g_last_gain_test_command_tick) <=
@@ -770,12 +864,12 @@ int main(void)
       {
         USB_ApplyCommandToMotors(&g_current_command);
       }
-      g_last_control_tick = HAL_GetTick();
     }
 
     if ((HAL_GetTick() - g_last_state_tick) >= USB_STATE_PERIOD_MS)
     {
-      USB_SendRobotState();
+      if (g_motors_test_active != 0U) USB_SendMotorsTestState();
+      else USB_SendRobotState();
       g_last_state_tick = HAL_GetTick();
     }
 
@@ -790,7 +884,7 @@ int main(void)
       g_last_wwdg_refresh_tick = HAL_GetTick();
     }
 
-    HAL_Delay(1);
+    /* Poll continuously so a blocking delay cannot stretch the 2 ms period. */
 
   }
   /* USER CODE END 3 */
