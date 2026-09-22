@@ -238,7 +238,7 @@ static void motor_mark_suspect(p_motor_state_s state)
 }
 
 
-static uint8_t motor_validate_and_commit_many_feedback(FDCAN_HandleTypeDef *fdcanHandle,
+static uint8_t motor_validate_and_commit_feedback(FDCAN_HandleTypeDef *fdcanHandle,
                                                        uint8_t id,
                                                        float position,
                                                        float velocity,
@@ -310,6 +310,21 @@ p_motor_state_s motor_get_state(port_t portx, uint8_t id)
 }
 
 
+/* Position-only replies must never manufacture or clear a drive fault. */
+static void motor_commit_fault(p_motor_state_s state, uint8_t fault)
+{
+    state->fault = fault;
+    state->fault_valid = 1U;
+    state->last_fault_ms = HAL_GetTick();
+}
+
+uint8_t motor_get_fresh_fault(const motor_state_s *state, uint32_t now_ms, uint32_t timeout_ms)
+{
+    if (state->fault_valid == 0U || now_ms - state->last_fault_ms > timeout_ms)
+        return MOTOR_FAULT_UNKNOWN;
+    return state->fault;
+}
+
 /**
  * @brief 解析电机返回信息
  * @param fdcanHandle
@@ -333,13 +348,29 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         int16_t vel = 0;
         int16_t tqe = 0;
         const uint8_t type = p_data[1] >> 6;
+        /* 0x17 0x01 reads three int16 registers. Its reply starts 0x27 0x01:
+         * byte 1 is the register address, NOT a compact feedback fault byte. */
+        const uint8_t position_only = p_data[0] == 0x27U && p_data[1] == 0x01U;
+        if (!position_only)
+        {
+            if (type != MANY_GET_MODE_FLAUT_POS_VEL_TQE &&
+                type != MANY_GET_TEMP_FLAUT_POS_VEL_TQE)
+            {
+                motor_mark_suspect(&p_motor_state[id_index]);
+                return;
+            }
+            motor_commit_fault(&p_motor_state[id_index], p_data[1] & 0x3FU);
+            if (type == MANY_GET_TEMP_FLAUT_POS_VEL_TQE)
+                p_motor_state[id_index].temp = (int8_t)p_data[0];
+            else
+                p_motor_state[id_index].mode = p_data[0];
+        }
 
         my_memcpy((uint8_t *)&pos, p_data + 2, sizeof(int16_t));
         my_memcpy((uint8_t *)&vel, p_data + 4, sizeof(int16_t));
         my_memcpy((uint8_t *)&tqe, p_data + 6, sizeof(int16_t));
 
-        if (type >= MANY_GET_MAX_NUM ||
-            pos == (int16_t)NAN_INT16 ||
+        if (pos == (int16_t)NAN_INT16 ||
             vel == (int16_t)NAN_INT16 ||
             tqe == (int16_t)NAN_INT16)
         {
@@ -352,11 +383,10 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         const float tqe_temp = tqe_int2float(tqe, TINT16);
         const float torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
 
-        if (motor_validate_and_commit_many_feedback(fdcanHandle, id, position, velocity, torque) == 0U)
+        if (motor_validate_and_commit_feedback(fdcanHandle, id, position, velocity, torque) == 0U)
         {
             return;
         }
-        p_motor_state[id_index].fault = p_data[1] & 0x3F;
     }
     else if (len >= 14U &&
              p_data[0] == 0x24 && p_data[1] == 0x04 && p_data[2] == 0x00  // TINT16 解析
@@ -371,11 +401,17 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 9, sizeof(int16_t));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT16);
+        motor_commit_fault(&p_motor_state[id_index], p_data[13]);
+        if (pos == (int16_t)NAN_INT16 || vel == (int16_t)NAN_INT16 || tqe == (int16_t)NAN_INT16)
+        {
+            motor_mark_suspect(&p_motor_state[id_index]);
+            return;
+        }
+        const float position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
+        const float velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT16);
         const float tqe_temp = tqe_int2float(tqe, TINT16);
-        p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
-        p_motor_state[id_index].fault = (uint8_t)p_data[13];
+        const float torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
+        (void)motor_validate_and_commit_feedback(fdcanHandle, id, position, velocity, torque);
     }
     else if (len >= 22U &&
              p_data[0] == 0x28 && p_data[1] == 0x04 && p_data[2] == 0x00  // TINT32 解析
@@ -390,11 +426,17 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 15, sizeof(int32_t));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TINT32);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT32);
+        motor_commit_fault(&p_motor_state[id_index], p_data[21]);
+        if (pos == (int32_t)NAN_INT32 || vel == (int32_t)NAN_INT32 || tqe == (int32_t)NAN_INT32)
+        {
+            motor_mark_suspect(&p_motor_state[id_index]);
+            return;
+        }
+        const float position = motor_position_from_raw(fdcanHandle, id, pos, TINT32);
+        const float velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TINT32);
         const float tqe_temp = tqe_int2float(tqe, TINT32);
-        p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
-        p_motor_state[id_index].fault = (uint8_t)p_data[21];
+        const float torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
+        (void)motor_validate_and_commit_feedback(fdcanHandle, id, position, velocity, torque);
     }
     else if (len >= 22U &&
              p_data[0] == 0x2C && p_data[1] == 0x04 && p_data[2] == 0x00  // TFLOAT 解析
@@ -409,11 +451,12 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         my_memcpy((uint8_t *)&tqe, p_data + 15, sizeof(float));
 
         p_motor_state[id_index].mode = p_data[3];
-        p_motor_state[id_index].position = motor_position_from_raw(fdcanHandle, id, pos, TFLOAT);
-        p_motor_state[id_index].velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TFLOAT);
+        motor_commit_fault(&p_motor_state[id_index], p_data[21]);
+        const float position = motor_position_from_raw(fdcanHandle, id, pos, TFLOAT);
+        const float velocity = motor_velocity_from_raw(fdcanHandle, id, vel, TFLOAT);
         const float tqe_temp = tqe_int2float(tqe, TFLOAT);
-        p_motor_state[id_index].torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
-        p_motor_state[id_index].fault = (uint8_t)p_data[21];
+        const float torque = tqe_restore(tqe_temp, motor_get_model1(fdcanHandle, id));
+        (void)motor_validate_and_commit_feedback(fdcanHandle, id, position, velocity, torque);
     }
     else if (len == 7 && p_data[0] == 0x41 && p_data[1] == 0x01 && p_data[2] == 0x04  // 设置信息解析
              && p_data[3] == 0x4F && p_data[4] == 0x4B && p_data[5] == 0x0D && p_data[6] == 0x0A)

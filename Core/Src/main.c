@@ -575,7 +575,8 @@ static void USB_ApplyMotorsTest(void)
   uint8_t enabled = fresh && (g_motors_test_command.flags & 1U) &&
       motor_all_active_states_fresh(now, MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS);
   for (uint8_t i = 0U; i < 6U; ++i)
-    if (USB_GetJointMotorState(i)->fault != 0U) enabled = 0U;
+    if (motor_get_fresh_fault(USB_GetJointMotorState(i), now,
+        MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS) != 0U) enabled = 0U;
   g_motors_test_flags = 1U | (fresh ? 2U : 0U) | (enabled ? 4U : 0U);
   g_motors_test_applied_seq = g_motors_test_command.seq;
   for (uint8_t i = 0U; i < 6U; ++i)
@@ -588,6 +589,20 @@ static void USB_ApplyMotorsTest(void)
   }
   motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
   motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+
+  /* Keep the known position reply; poll ordinary registers for the real fault
+   * at 50 Hz. read_motor_state_int16 only reads registers, never changes mode.
+   * This does not require the newer 0xFF 0xFE temperature reply format. */
+  static uint32_t last_fault_poll_tick = 0U;
+  if (now - last_fault_poll_tick >= USB_STATE_PERIOD_MS)
+  {
+    last_fault_poll_tick = now;
+    for (uint8_t id = 1U; id <= MOTOR_ACTIVE_NUM; ++id)
+    {
+      motor_get_state_send(PORT1, TINT16, id);
+      motor_get_state_send(PORT2, TINT16, id);
+    }
+  }
 }
 
 static void USB_SendMotorsTestState(void)
@@ -612,7 +627,7 @@ static void USB_SendMotorsTestState(void)
     d->accept_count = m->accept_count;
     d->suspect_count = m->suspect_count;
     d->valid = m->valid;
-    d->fault = m->fault;
+    d->fault = motor_get_fresh_fault(m, now, MOTOR_FEEDBACK_MONITOR_TIMEOUT_MS);
   }
   (void)USB_CDC_SendMotorsTestState(&state);
 }
@@ -749,17 +764,29 @@ int main(void)
   HAL_Delay(2U);
   USB_SendRobotState();
 
-  /* Move to the policy's default pose immediately after motor power-up. */
+  /* Send the startup trapezoidal trajectory directly over CAN. */
+  motor_many_pos_vel_acc(PORT1, 1, g_startup_joint_pos_deg[0], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_pos_vel_acc(PORT1, 2, g_startup_joint_pos_deg[1], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_pos_vel_acc(PORT1, 3, g_startup_joint_pos_deg[2], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_pos_vel_acc(PORT2, 1, g_startup_joint_pos_deg[3], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_pos_vel_acc(PORT2, 2, g_startup_joint_pos_deg[4], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_pos_vel_acc(PORT2, 3, g_startup_joint_pos_deg[5], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
+  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+
+  /* Keep subsequent 2 ms control cycles on the same pose and mode. */
   memcpy(g_current_command.target_joint_pos, g_startup_joint_pos_deg,
          sizeof(g_startup_joint_pos_deg));
   g_current_command.flags = USB_CDC_COMMAND_FLAG_STARTUP_TRAJECTORY;
-  USB_ApplyCommandToMotors(&g_current_command);
   g_last_state_tick = HAL_GetTick();
   g_last_control_tick = g_last_state_tick;
 
   /* Start WWDG only after all blocking startup operations have completed. */
   MX_WWDG1_Init();
   g_last_wwdg_refresh_tick = HAL_GetTick();
+
+  motor_many_pos_vel_tqe_kp_kd_2(PORT1, 1, 50, 0, 0, 8, 0.5);
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
 
   /* USER CODE END 2 */
 

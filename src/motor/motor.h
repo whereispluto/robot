@@ -7,6 +7,7 @@
 #define  MOTOR_PORT_NUM  2  // 使用 CAN 通道数量  
 #define  MOTOR_MAX_NUM   6  // 单个 CAN 通道支持的最大电机 ID/一拖多数据槽数量
 #define  MOTOR_ACTIVE_NUM 3 // 本机器人每个 CAN 通道实际使用 ID 1~3
+#define  MOTOR_FAULT_UNKNOWN 0xFFU // 未收到真实故障码，或故障码反馈过期
 
 
 #include "stm32h7xx_hal.h"  
@@ -47,6 +48,8 @@ typedef struct
     const motor_type_t model;  // 电机型号（这个参数由用户自定义，此程序根据这个变量进行电机力矩修正）
     version_s version;  // 电机固件版本号
     uint32_t last_update_ms;  // 最近一次有效的一拖多反馈时间
+    uint32_t last_fault_ms;   // 最近一次真实故障码反馈时间
+    uint8_t fault_valid;
     uint32_t accept_count;
     uint32_t suspect_count;
     uint8_t valid;
@@ -75,6 +78,7 @@ void motor_print_state(void);
 void motor_print_version(void);
 
 p_motor_state_s motor_get_state(port_t portx, uint8_t id);
+uint8_t motor_get_fresh_fault(const motor_state_s *state, uint32_t now_ms, uint32_t timeout_ms);
 
 FDCAN_HandleTypeDef *motor_get_fdcan_pointer(port_t portx);
 p_motor_state_s motor_get_state_pointer1(FDCAN_HandleTypeDef *fdcanHandle);
