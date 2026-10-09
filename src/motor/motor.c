@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "stm32h723xx.h"
 #include <stdio.h>
+#include <string.h>
 
 
 /************************************下面为需要修改的部分*******************************************/
@@ -228,12 +229,69 @@ static float motor_velocity_from_raw(FDCAN_HandleTypeDef *fdcanHandle,
     return is_position_direction_reversed(fdcanHandle, id) ? -velocity : velocity;
 }
 
-static void motor_mark_suspect(p_motor_state_s state)
+static void motor_trace_begin(p_motor_state_s state, uint8_t id,
+                              const uint8_t *data, uint8_t length)
+{
+    motor_feedback_trace_t *trace = &state->last_rx;
+    memset(trace, 0, sizeof(*trace));
+    trace->timestamp_ms = HAL_GetTick();
+    /* The receive filter already requires standard ID (source_id << 8). */
+    trace->can_id = (uint32_t)id << 8;
+    trace->previous_age_ms = state->valid != 0U
+        ? trace->timestamp_ms - state->last_update_ms : UINT32_MAX;
+    trace->previous_position = state->valid != 0U ? state->position : NAN;
+    trace->previous_velocity = state->valid != 0U ? state->velocity : NAN;
+    trace->position = NAN;
+    trace->velocity = NAN;
+    trace->torque = NAN;
+    trace->data_length = length;
+    trace->valid = 1U;
+    const uint8_t copy_length = length < MOTOR_FEEDBACK_TRACE_RAW_SIZE
+        ? length : MOTOR_FEEDBACK_TRACE_RAW_SIZE;
+    memcpy(trace->raw, data, copy_length);
+}
+
+
+static void motor_trace_update_peak(p_motor_state_s state)
+{
+    const motor_feedback_trace_t *trace = &state->last_rx;
+    if (isfinite(trace->velocity) &&
+        (state->peak_rx.valid == 0U ||
+         fabsf(trace->velocity) > fabsf(state->peak_rx.velocity)))
+    {
+        state->peak_rx = *trace;
+    }
+}
+
+
+/* Preserve the parseable parts of a sentinel-bearing reply as evidence while
+ * keeping the sentinel itself explicitly invalid. No control state is changed. */
+static void motor_trace_sentinel_candidate(FDCAN_HandleTypeDef *fdcanHandle,
+                                           uint8_t id, float position,
+                                           float velocity, float torque,
+                                           data_type_t type)
+{
+    p_motor_state_s state = &motor_get_state_pointer1(fdcanHandle)[id - 1U];
+    const float sentinel = type == TINT16 ? (float)(int16_t)NAN_INT16
+                                        : (float)(int32_t)NAN_INT32;
+    state->last_rx.position = position == sentinel ? NAN
+        : motor_position_from_raw(fdcanHandle, id, position, type);
+    state->last_rx.velocity = velocity == sentinel ? NAN
+        : motor_velocity_from_raw(fdcanHandle, id, velocity, type);
+    state->last_rx.torque = torque == sentinel ? NAN
+        : tqe_restore(tqe_int2float(torque, type), motor_get_model1(fdcanHandle, id));
+}
+
+
+static void motor_mark_suspect(p_motor_state_s state, motor_trace_reason_t reason)
 {
     motor_suspect_count++;
     if (state != NULL)
     {
         state->suspect_count++;
+        state->last_rx.reason = (uint8_t)reason;
+        state->last_reject = state->last_rx;
+        motor_trace_update_peak(state);
     }
 }
 
@@ -246,11 +304,19 @@ static uint8_t motor_validate_and_commit_feedback(FDCAN_HandleTypeDef *fdcanHand
 {
     p_motor_state_s state = &motor_get_state_pointer1(fdcanHandle)[id - 1U];
     const uint32_t now = HAL_GetTick();
+    state->last_rx.position = position;
+    state->last_rx.velocity = velocity;
+    state->last_rx.torque = torque;
 
-    if (!isfinite(position) || !isfinite(velocity) || !isfinite(torque) ||
-        fabsf(velocity) > MOTOR_MONITOR_MAX_VELOCITY_DEG_S)
+    if (!isfinite(position) || !isfinite(velocity) || !isfinite(torque))
     {
-        motor_mark_suspect(state);
+        motor_mark_suspect(state, MOTOR_TRACE_REASON_NONFINITE);
+        return 0U;
+    }
+
+    if (fabsf(velocity) > MOTOR_MONITOR_MAX_VELOCITY_DEG_S)
+    {
+        motor_mark_suspect(state, MOTOR_TRACE_REASON_VELOCITY_LIMIT);
         return 0U;
     }
 
@@ -266,7 +332,7 @@ static uint8_t motor_validate_and_commit_feedback(FDCAN_HandleTypeDef *fdcanHand
 
             if (fabsf(position - state->position) > allowed_delta)
             {
-                motor_mark_suspect(state);
+                motor_mark_suspect(state, MOTOR_TRACE_REASON_POSITION_JUMP);
                 return 0U;
             }
         }
@@ -278,6 +344,7 @@ static uint8_t motor_validate_and_commit_feedback(FDCAN_HandleTypeDef *fdcanHand
     state->last_update_ms = now;
     state->accept_count++;
     state->valid = 1U;
+    motor_trace_update_peak(state);
     return 1U;
 }
 
@@ -341,6 +408,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
 
     p_motor_state_s p_motor_state = motor_get_state_pointer1(fdcanHandle);
     const uint8_t id_index = id - 1;
+    motor_trace_begin(&p_motor_state[id_index], id, p_data, len);
 
     if (len == 8U && id <= MOTOR_ACTIVE_NUM)   // 一拖多模式解析
     {
@@ -351,14 +419,18 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         /* 0x17 0x01 reads three int16 registers. Its reply starts 0x27 0x01:
          * byte 1 is the register address, NOT a compact feedback fault byte. */
         const uint8_t position_only = p_data[0] == 0x27U && p_data[1] == 0x01U;
+        if (position_only)
+            p_motor_state[id_index].last_rx.format = MOTOR_TRACE_FORMAT_LEGACY;
         if (!position_only)
         {
             if (type != MANY_GET_MODE_FLAUT_POS_VEL_TQE &&
                 type != MANY_GET_TEMP_FLAUT_POS_VEL_TQE)
             {
-                motor_mark_suspect(&p_motor_state[id_index]);
+                motor_mark_suspect(&p_motor_state[id_index], MOTOR_TRACE_REASON_INVALID_TYPE);
                 return;
             }
+            p_motor_state[id_index].last_rx.format = type == MANY_GET_TEMP_FLAUT_POS_VEL_TQE
+                ? MOTOR_TRACE_FORMAT_COMPACT_TEMP : MOTOR_TRACE_FORMAT_COMPACT_MODE;
             motor_commit_fault(&p_motor_state[id_index], p_data[1] & 0x3FU);
             if (type == MANY_GET_TEMP_FLAUT_POS_VEL_TQE)
                 p_motor_state[id_index].temp = (int8_t)p_data[0];
@@ -374,7 +446,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
             vel == (int16_t)NAN_INT16 ||
             tqe == (int16_t)NAN_INT16)
         {
-            motor_mark_suspect(&p_motor_state[id_index]);
+            motor_trace_sentinel_candidate(fdcanHandle, id, pos, vel, tqe, TINT16);
+            motor_mark_suspect(&p_motor_state[id_index], MOTOR_TRACE_REASON_SENTINEL);
             return;
         }
 
@@ -392,6 +465,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
              p_data[0] == 0x24 && p_data[1] == 0x04 && p_data[2] == 0x00  // TINT16 解析
             && p_data[11] == 0x21 && p_data[12] == 0x0F)
     {
+        p_motor_state[id_index].last_rx.format = MOTOR_TRACE_FORMAT_FULL_INT16;
         int16_t pos = 0;
         int16_t vel = 0;
         int16_t tqe = 0;
@@ -404,7 +478,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         motor_commit_fault(&p_motor_state[id_index], p_data[13]);
         if (pos == (int16_t)NAN_INT16 || vel == (int16_t)NAN_INT16 || tqe == (int16_t)NAN_INT16)
         {
-            motor_mark_suspect(&p_motor_state[id_index]);
+            motor_trace_sentinel_candidate(fdcanHandle, id, pos, vel, tqe, TINT16);
+            motor_mark_suspect(&p_motor_state[id_index], MOTOR_TRACE_REASON_SENTINEL);
             return;
         }
         const float position = motor_position_from_raw(fdcanHandle, id, pos, TINT16);
@@ -417,6 +492,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
              p_data[0] == 0x28 && p_data[1] == 0x04 && p_data[2] == 0x00  // TINT32 解析
              && p_data[19] == 0x21 && p_data[20] == 0x0F)
     {
+        p_motor_state[id_index].last_rx.format = MOTOR_TRACE_FORMAT_FULL_INT32;
         int32_t pos = 0;
         int32_t vel = 0;
         int32_t tqe = 0;
@@ -429,7 +505,8 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
         motor_commit_fault(&p_motor_state[id_index], p_data[21]);
         if (pos == (int32_t)NAN_INT32 || vel == (int32_t)NAN_INT32 || tqe == (int32_t)NAN_INT32)
         {
-            motor_mark_suspect(&p_motor_state[id_index]);
+            motor_trace_sentinel_candidate(fdcanHandle, id, pos, vel, tqe, TINT32);
+            motor_mark_suspect(&p_motor_state[id_index], MOTOR_TRACE_REASON_SENTINEL);
             return;
         }
         const float position = motor_position_from_raw(fdcanHandle, id, pos, TINT32);
@@ -442,6 +519,7 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
              p_data[0] == 0x2C && p_data[1] == 0x04 && p_data[2] == 0x00  // TFLOAT 解析
              && p_data[19] == 0x21 && p_data[20] == 0x0F)
     {
+        p_motor_state[id_index].last_rx.format = MOTOR_TRACE_FORMAT_FULL_FLOAT;
         float pos = 0;
         float vel = 0;
         float tqe = 0;
@@ -476,6 +554,25 @@ static void motor_process_state(FDCAN_HandleTypeDef *fdcanHandle, const uint8_t 
             p_motor_state[id_index].version.major = 3;
             p_motor_state[id_index].version.minor = 9;
             p_motor_state[id_index].version.patch = 1;
+        }
+    }
+    else
+    {
+        /* This frame was already ignored by the parser: retain it for diagnosis
+         * without changing freshness, fault state, or rejection counters. */
+        p_motor_state[id_index].last_rx.reason = MOTOR_TRACE_REASON_UNRECOGNIZED;
+    }
+}
+
+
+void motor_clear_diagnostic_peaks(void)
+{
+    for (uint8_t port = 0U; port < MOTOR_PORT_NUM; port++)
+    {
+        for (uint8_t id = 0U; id < MOTOR_MAX_NUM; id++)
+        {
+            memset(&motor_state_port[port][id].peak_rx, 0,
+                   sizeof(motor_state_port[port][id].peak_rx));
         }
     }
 }

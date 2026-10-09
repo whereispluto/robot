@@ -418,7 +418,11 @@ uint8_t USB_CDC_GetLatestMotorsTestCommand(usb_cdc_motors_test_command_t *comman
 uint8_t USB_CDC_SendMotorsTestState(const usb_cdc_motors_test_state_t *state)
 {
   static uint16_t sequence = 0U;
-  const uint16_t payload_length = 196U;
+  const uint16_t extension_version = 1U;
+  const uint16_t extension_size = 1288U;
+  const uint16_t payload_length = 196U + 1288U;
+  _Static_assert(10U + 196U + 1288U + 2U <= APP_TX_DATA_SIZE,
+                 "Motor diagnostics exceed USB TX buffer");
   uint16_t offset = USB_CDC_HEADER_SIZE;
   /* Advance even on a busy endpoint so the host can detect dropped frames. */
   uint16_t seq = sequence++;
@@ -446,7 +450,55 @@ uint8_t USB_CDC_SendMotorsTestState(const usb_cdc_motors_test_state_t *state)
     COPY_FIELD(state->motors[i].valid);
     COPY_FIELD(state->motors[i].fault);
   }
+  memcpy(&tx_frame[offset], "MDG1", 4U);
+  offset += 4U;
+  COPY_FIELD(extension_version);
+  COPY_FIELD(extension_size);
+  COPY_FIELD(state->command_age_ms);
+  COPY_FIELD(state->max_control_gap_ms);
+  COPY_FIELD(state->kp_nm_per_rad);
+  COPY_FIELD(state->kd_nms_per_rad);
+  COPY_FIELD(state->configured_max_torque_nm);
+  COPY_FIELD(state->imu_status);
+  for (uint8_t i = 0U; i < 2U; ++i)
+  {
+    COPY_FIELD(state->buses[i].psr);
+    COPY_FIELD(state->buses[i].ecr);
+    COPY_FIELD(state->buses[i].hal_error);
+    COPY_FIELD(state->buses[i].valid);
+  }
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    const usb_cdc_motor_trace_t *d = &state->traces[i];
+    COPY_FIELD(d->last_fault_ms);
+    COPY_FIELD(d->fault_age_ms);
+    COPY_FIELD(d->fault_valid);
+    COPY_FIELD(d->mode);
+    COPY_FIELD(d->temperature);
+    COPY_FIELD(d->reserved);
+    COPY_FIELD(d->pd_codes);
+    COPY_FIELD(d->tx_valid);
+    const motor_feedback_trace_t *traces[3] = {&d->last_rx, &d->last_reject, &d->peak_rx};
+    for (uint8_t j = 0U; j < 3U; ++j)
+    {
+      const motor_feedback_trace_t *trace = traces[j];
+      COPY_FIELD(trace->timestamp_ms);
+      COPY_FIELD(trace->can_id);
+      COPY_FIELD(trace->previous_age_ms);
+      COPY_FIELD(trace->position);
+      COPY_FIELD(trace->velocity);
+      COPY_FIELD(trace->torque);
+      COPY_FIELD(trace->previous_position);
+      COPY_FIELD(trace->previous_velocity);
+      COPY_FIELD(trace->reason);
+      COPY_FIELD(trace->format);
+      COPY_FIELD(trace->data_length);
+      COPY_FIELD(trace->valid);
+      COPY_FIELD(trace->raw);
+    }
+  }
 #undef COPY_FIELD
+  if (offset != USB_CDC_HEADER_SIZE + payload_length) return USBD_FAIL;
   uint16_t crc = USB_CDC_Crc16Ccitt(tx_frame, offset);
   memcpy(&tx_frame[offset], &crc, 2U);
   tx_busy = 1U;

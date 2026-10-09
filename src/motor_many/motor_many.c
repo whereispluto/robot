@@ -417,6 +417,30 @@ void motor_many_pos_vel_tqe_kp_kd_2(port_t portx, const uint8_t id, const float 
 }
 
 
+uint8_t motor_many_get_pd_codes(port_t portx, uint8_t id, int16_t codes[5])
+{
+    if (portx < PORT1 || portx >= PORT1 + MANY_PORT_SIZE ||
+        id == 0U || id > MANY_MOTOR_SIZE || codes == NULL)
+    {
+        return 0U;
+    }
+
+    const many_data_s *data = &many_data_port[portx - PORT1][0];
+    if (data->mode != MODE_POS_VEL_TQE_KP_KD2)
+    {
+        return 0U;
+    }
+
+    const many_pos_vel_tqe_kp_kd_s *packed = &data->pos_vel_tqe_kp_kd[id - 1U];
+    codes[0] = packed->pos;
+    codes[1] = packed->vel;
+    codes[2] = packed->tqe;
+    codes[3] = packed->kp;
+    codes[4] = packed->kd;
+    return 1U;
+}
+
+
 static uint8_t get_data_max(uint8_t mode)
 {
     switch (mode)

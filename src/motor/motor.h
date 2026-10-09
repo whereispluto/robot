@@ -35,6 +35,49 @@ typedef struct
     uint8_t patch : 4;
 } version_s, *p_version_s;
 
+/* Diagnostic records are serialized field-by-field; unknown candidate values
+ * are NAN. valid describes record presence, not acceptance by the validator. */
+#define MOTOR_FEEDBACK_TRACE_RAW_SIZE 24U
+
+typedef enum
+{
+    MOTOR_TRACE_FORMAT_UNKNOWN = 0,
+    MOTOR_TRACE_FORMAT_LEGACY = 1,
+    MOTOR_TRACE_FORMAT_COMPACT_MODE = 2,
+    MOTOR_TRACE_FORMAT_COMPACT_TEMP = 3,
+    MOTOR_TRACE_FORMAT_FULL_INT16 = 4,
+    MOTOR_TRACE_FORMAT_FULL_INT32 = 5,
+    MOTOR_TRACE_FORMAT_FULL_FLOAT = 6,
+} motor_trace_format_t;
+
+typedef enum
+{
+    MOTOR_TRACE_REASON_NONE = 0,
+    MOTOR_TRACE_REASON_INVALID_TYPE = 1,
+    MOTOR_TRACE_REASON_SENTINEL = 2,
+    MOTOR_TRACE_REASON_NONFINITE = 3,
+    MOTOR_TRACE_REASON_VELOCITY_LIMIT = 4,
+    MOTOR_TRACE_REASON_POSITION_JUMP = 5,
+    MOTOR_TRACE_REASON_UNRECOGNIZED = 6,
+} motor_trace_reason_t;
+
+typedef struct
+{
+    uint32_t timestamp_ms;
+    uint32_t can_id;
+    uint32_t previous_age_ms; /* UINT32_MAX if no previous valid feedback. */
+    float position;
+    float velocity;
+    float torque;
+    float previous_position;
+    float previous_velocity;
+    uint8_t reason;
+    uint8_t format;
+    uint8_t data_length; /* Original CAN payload length, possibly > raw size. */
+    uint8_t valid;
+    uint8_t raw[MOTOR_FEEDBACK_TRACE_RAW_SIZE];
+} motor_feedback_trace_t;
+
 
 typedef struct
 {
@@ -53,6 +96,9 @@ typedef struct
     uint32_t accept_count;
     uint32_t suspect_count;
     uint8_t valid;
+    motor_feedback_trace_t last_rx;
+    motor_feedback_trace_t last_reject;
+    motor_feedback_trace_t peak_rx;
 } motor_state_s, *p_motor_state_s;  // 这个结构体会定义成结构体数组，其中数组下标 +1 即为电机 ID
 
 
@@ -89,6 +135,8 @@ void motor_process_state_all(void);
 uint8_t motor_all_active_states_fresh(uint32_t now_ms, uint32_t timeout_ms);
 uint32_t motor_get_suspect_count(void);
 uint32_t motor_get_rx_lost_count(void);
+/* Clear interval velocity peaks only after the diagnostic packet was queued. */
+void motor_clear_diagnostic_peaks(void);
 
 
 

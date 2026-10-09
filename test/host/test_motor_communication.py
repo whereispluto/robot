@@ -11,10 +11,13 @@ HAL = """
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-typedef struct { void *Instance; } FDCAN_HandleTypeDef;
+typedef struct { uint32_t PSR, ECR; } FDCAN_GlobalTypeDef;
+extern FDCAN_GlobalTypeDef fake_fdcan1, fake_fdcan2;
+typedef struct { FDCAN_GlobalTypeDef *Instance; uint32_t ErrorCode; } FDCAN_HandleTypeDef;
 typedef struct { uint32_t Identifier, DataLength, IdType, RxFrameType; } FDCAN_RxHeaderTypeDef;
-#define FDCAN1 ((void *)1)
-#define FDCAN2 ((void *)2)
+#define FDCAN1 (&fake_fdcan1)
+#define FDCAN2 (&fake_fdcan2)
+#define USBD_OK 0
 #define FDCAN_RX_FIFO0 0
 #define FDCAN_STANDARD_ID 0
 #define FDCAN_DATA_FRAME 0

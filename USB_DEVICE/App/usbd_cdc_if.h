@@ -31,6 +31,7 @@
 #include "usbd_cdc.h"
 
 /* USER CODE BEGIN INCLUDE */
+#include "motor.h"
 
 /* USER CODE END INCLUDE */
 
@@ -120,6 +121,23 @@ typedef struct
   uint8_t valid, fault;
 } usb_cdc_motor_diagnostic_t;
 
+/* MDG1 extension version 1; wire size is independent of C struct padding. */
+typedef struct
+{
+  uint32_t psr, ecr, hal_error, valid;
+} usb_cdc_bus_diagnostic_t;
+
+typedef struct
+{
+  uint32_t last_fault_ms, fault_age_ms;
+  uint8_t fault_valid, mode;
+  int8_t temperature;
+  uint8_t reserved;
+  int16_t pd_codes[5]; /* Actual CAN buffer: position, velocity, torque, kp, kd. */
+  uint16_t tx_valid;
+  motor_feedback_trace_t last_rx, last_reject, peak_rx;
+} usb_cdc_motor_trace_t;
+
 typedef struct
 {
   uint32_t timestamp_ms;
@@ -127,6 +145,11 @@ typedef struct
   uint16_t flags; /* bit 0: service active; bit 1: command fresh; bit 2: PD enabled */
   uint32_t rx_lost_count, tx_error_count;
   usb_cdc_motor_diagnostic_t motors[6];
+  uint32_t command_age_ms, max_control_gap_ms;
+  float kp_nm_per_rad, kd_nms_per_rad, configured_max_torque_nm;
+  uint32_t imu_status;
+  usb_cdc_bus_diagnostic_t buses[2];
+  usb_cdc_motor_trace_t traces[6];
 } usb_cdc_motors_test_state_t;
 
 /* USER CODE END EXPORTED_TYPES */
