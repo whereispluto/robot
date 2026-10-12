@@ -20,8 +20,8 @@ static uint8_t legacy[8] = {0x27, 0x01, 1, 0, 2, 0, 3, 0};
 /* Full int16 response, padded to a valid CAN FD DLC of 16 bytes. */
 static uint8_t full[16] = {0x24, 4, 0, 10, 0, 1, 0, 2, 0, 3, 0,
                           0x21, 0x0f, 0, 0x50, 0x50};
-static unsigned fault_queries, control_frames;
-static uint8_t emulate, drop_fault_reply, injected_fault[2][3];
+static unsigned control_frames;
+static uint8_t emulate, drop_compact_reply, injected_fault[2][3];
 static int16_t last_kp[2][3];
 
 void fdcan_send(FDCAN_HandleTypeDef *h, uint32_t id, uint8_t *data, uint16_t size)
@@ -30,26 +30,23 @@ void fdcan_send(FDCAN_HandleTypeDef *h, uint32_t id, uint8_t *data, uint16_t siz
     assert(emulate);
     if (id == 0x80b0)
     {
-        /* The PD command keeps the existing, universally supported query. */
-        assert(size == 64 && data[62] == 0x17 && data[63] == 0x01);
+        /* V4.5.3 returns temperature, fault, position, velocity and torque. */
+        assert(size == 64 && data[62] == 0xff && data[63] == 0xfe);
         ++control_frames;
         for (uint8_t motor = 1; motor <= 3; ++motor)
         {
             memcpy(&last_kp[port][motor - 1], data + (motor - 1) * 10 + 6, 2);
-            motor_process_state(h, motor, legacy, sizeof legacy);
+            if (!drop_compact_reply)
+            {
+                uint8_t compact[8] = {39, 0x40, 1, 0, 2, 0, 3, 0};
+                compact[1] |= injected_fault[port][motor - 1];
+                motor_process_state(h, motor, compact, sizeof compact);
+            }
         }
     }
     else
     {
-        static const uint8_t expected[] = {0x14, 4, 0, 0x11, 0x0f};
-        assert(id >= 0x8001 && id <= 0x8003);
-        assert(size == sizeof expected && memcmp(data, expected, size) == 0);
-        ++fault_queries;
-        if (!drop_fault_reply)
-        {
-            full[13] = injected_fault[port][(id & 0xff) - 1];
-            motor_process_state(h, id & 0xff, full, sizeof full);
-        }
+        assert(!"unexpected per-motor state query");
     }
 }
 
@@ -132,16 +129,16 @@ static void test_service(void)
     g_motors_test_command.seq = 123;
     step(1000);
     assert(!(telemetry.flags & 4)); /* Wait for actual fault feedback. */
-    assert(fault_queries == 6 && control_frames == 2);
+    assert(control_frames == 2);
     step(1002);
     assert(telemetry.flags & 4);
     assert(telemetry.command_seq == 123);
     for (unsigned j = 0; j < 6; ++j)
         assert(telemetry.motors[j].valid && telemetry.motors[j].fault == 0);
     for (uint32_t now = 1004; now <= 1018; now += 2) step(now);
-    assert(fault_queries == 6); /* No 500 Hz burst of diagnostic queries. */
+    assert(control_frames == 20);
     step(1020);
-    assert(fault_queries == 12);
+    assert(control_frames == 22);
     injected_fault[1][1] = 1;
     step(1040); step(1042);
     assert(!(telemetry.flags & 4) && telemetry.motors[4].fault == 1);
@@ -151,15 +148,15 @@ static void test_service(void)
     injected_fault[1][1] = 0;
     step(1060); step(1062);
     assert(telemetry.flags & 4);
-    drop_fault_reply = 1;
-    for (uint32_t now = 1064; now <= 1122; now += 2) step(now);
+    drop_compact_reply = 1;
+    for (uint32_t now = 1064; now <= 1124; now += 2) step(now);
     assert(!(telemetry.flags & 4));
     for (unsigned j = 0; j < 6; ++j)
     {
-        assert(telemetry.motors[j].valid && telemetry.motors[j].age_ms == 0);
+        assert(telemetry.motors[j].valid && telemetry.motors[j].age_ms > 60);
         assert(telemetry.motors[j].fault == MOTOR_FAULT_UNKNOWN);
     }
-    drop_fault_reply = 0;
+    drop_compact_reply = 0;
     step(1140); step(1142);
     assert(telemetry.flags & 4);
     tick = 1244; /* Fresh CAN data cannot override the PC command timeout. */

@@ -434,8 +434,8 @@ static void USB_ApplyCommandToMotors(const usb_cdc_command_t *command)
     motor_many_pos_vel_tqe_kp_kd_2(PORT2, 3, command->target_joint_pos[5], USB_CONTROL_TARGET_VELOCITY, USB_CONTROL_FEEDFORWARD_TORQUE, kp_nm_per_turn, kd_nms_per_turn);
   }
 
-  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
 }
 
 static p_motor_state_s USB_GetJointMotorState(uint8_t joint_index)
@@ -526,8 +526,8 @@ static void USB_ApplyGainTestCommandToMotors(
     USB_SetGainTestMotor(joint, target_position_deg, joint_kp, joint_kd);
   }
 
-  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
 }
 
 static void USB_ConfigureMotorTorqueLimits(void)
@@ -553,8 +553,8 @@ static void USB_ConfigureTorqueLimits(float max_torque_nm)
   motor_many_pos_vel_MAXtqe(PORT2, 2, NAN_FLOAT, 0.0f, max_torque_nm);
   motor_many_pos_vel_MAXtqe(PORT2, 3, NAN_FLOAT, 0.0f, max_torque_nm);
 
-  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
   g_configured_max_torque_nm = max_torque_nm;
 }
 
@@ -590,22 +590,11 @@ static void USB_ApplyMotorsTest(void)
         enabled ? g_motors_test_command.kp * USB_TWO_PI : 0.0f,
         enabled ? g_motors_test_command.kd * USB_TWO_PI : 0.0f);
   }
-  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
-
-  /* Keep the known position reply; poll ordinary registers for the real fault
-   * at 50 Hz. read_motor_state_int16 only reads registers, never changes mode.
-   * This does not require the newer 0xFF 0xFE temperature reply format. */
-  static uint32_t last_fault_poll_tick = 0U;
-  if (now - last_fault_poll_tick >= USB_STATE_PERIOD_MS)
-  {
-    last_fault_poll_tick = now;
-    for (uint8_t id = 1U; id <= MOTOR_ACTIVE_NUM; ++id)
-    {
-      motor_get_state_send(PORT1, TINT16, id);
-      motor_get_state_send(PORT2, TINT16, id);
-    }
-  }
+  /* All six drives run V4.5.3. The compact 0xFF 0xFE reply carries
+   * temperature, fault, position, velocity and torque on every control cycle,
+   * so a separate burst of full-state queries is unnecessary. */
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
 }
 
 static void USB_SendMotorsTestState(void)
@@ -825,8 +814,8 @@ int main(void)
   motor_many_pos_vel_acc(PORT2, 1, g_startup_joint_pos_deg[3], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
   motor_many_pos_vel_acc(PORT2, 2, g_startup_joint_pos_deg[4], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
   motor_many_pos_vel_acc(PORT2, 3, g_startup_joint_pos_deg[5], USB_STARTUP_MAX_VELOCITY_DEG_S, USB_STARTUP_ACCELERATION_DEG_S2);
-  motor_many_send(PORT1, MANY_GET_POS_VEL_TQE);
-  motor_many_send(PORT2, MANY_GET_POS_VEL_TQE);
+  motor_many_send(PORT1, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
+  motor_many_send(PORT2, MANY_GET_TEMP_FLAUT_POS_VEL_TQE);
 
   /* Keep subsequent 2 ms control cycles on the same pose and mode. */
   memcpy(g_current_command.target_joint_pos, g_startup_joint_pos_deg,
